@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Gif320Sharp/Gif320Sharp.csproj" />
+  <Project Path="Gif320Sharp_CLI/Gif320Sharp_CLI.csproj" />
+  <Project Path="Gif320Sharp_Test/Gif320Sharp_Test.csproj" />
+</Solution>
