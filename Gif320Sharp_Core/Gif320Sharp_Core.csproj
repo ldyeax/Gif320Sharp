@@ -1,0 +1,12 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+	<TargetFramework>netstandard2.1</TargetFramework>
+	<Nullable>enable</Nullable>
+	<AssemblyName>Gif320Sharp_Core</AssemblyName>
+	<RootNamespace>Gif320Sharp_Core</RootNamespace>
+	<PackageId>Gif320Sharp_Core</PackageId>
+	<InGameTerminalCopyToUnityAssemblies>true</InGameTerminalCopyToUnityAssemblies>
+  </PropertyGroup>
+
+</Project>

@@ -12,6 +12,11 @@
   </ItemGroup>
 
   <ItemGroup>
+	<ProjectReference Include="..\Gif320Sharp_Core\Gif320Sharp_Core.csproj" />
+	<ProjectReference Include="..\Gif320Sharp\Gif320Sharp.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
 	<Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
   </ItemGroup>
 
