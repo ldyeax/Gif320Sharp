@@ -8,6 +8,9 @@ namespace Gif320Sharp_Core
 		public const int CellPixelHeight = 12;
 		public const int TerminalColumns = 80;
 		public const int TerminalRows = 24;
+		public const double DisplayCellAspect = 4.0 / 11.0;
+		public const double DisplayPixelHeightScale =
+			CellPixelWidth / (CellPixelHeight * DisplayCellAspect);
 
 		public int CellsX { get; set; } = 16;
 
@@ -29,6 +32,14 @@ namespace Gif320Sharp_Core
 		public int MaxReductionIterations { get; set; } = 18;
 
 		public int AutoTuneFinalists { get; set; } = 8;
+
+		public int AutoTuneFrequencyPreference { get; set; }
+
+		public int AutoTuneSmoothnessPreference { get; set; }
+
+		public int AutoTuneGlyphReusePreference { get; set; }
+
+		public int ReverseVideoInversionTolerance { get; set; } = 4;
 
 		public bool IncludeTerminalSetup { get; set; } = true;
 
@@ -68,6 +79,10 @@ namespace Gif320Sharp_Core
 				GlyphReductionMode = GlyphReductionMode,
 				MaxReductionIterations = MaxReductionIterations,
 				AutoTuneFinalists = AutoTuneFinalists,
+				AutoTuneFrequencyPreference = AutoTuneFrequencyPreference,
+				AutoTuneSmoothnessPreference = AutoTuneSmoothnessPreference,
+				AutoTuneGlyphReusePreference = AutoTuneGlyphReusePreference,
+				ReverseVideoInversionTolerance = ReverseVideoInversionTolerance,
 				IncludeTerminalSetup = IncludeTerminalSetup,
 				IncludeTerminalReset = IncludeTerminalReset,
 				CenterOnScreen = CenterOnScreen,
@@ -120,6 +135,27 @@ namespace Gif320Sharp_Core
 			if (AutoTuneFinalists <= 0)
 			{
 				throw new ArgumentOutOfRangeException(nameof(AutoTuneFinalists));
+			}
+
+			if (AutoTuneFrequencyPreference < -100 || AutoTuneFrequencyPreference > 100)
+			{
+				throw new ArgumentOutOfRangeException(nameof(AutoTuneFrequencyPreference));
+			}
+
+			if (AutoTuneSmoothnessPreference < -100 || AutoTuneSmoothnessPreference > 100)
+			{
+				throw new ArgumentOutOfRangeException(nameof(AutoTuneSmoothnessPreference));
+			}
+
+			if (AutoTuneGlyphReusePreference < -100 || AutoTuneGlyphReusePreference > 100)
+			{
+				throw new ArgumentOutOfRangeException(nameof(AutoTuneGlyphReusePreference));
+			}
+
+			if (ReverseVideoInversionTolerance < 0
+				|| ReverseVideoInversionTolerance > CellPixelWidth * CellPixelHeight)
+			{
+				throw new ArgumentOutOfRangeException(nameof(ReverseVideoInversionTolerance));
 			}
 		}
 	}

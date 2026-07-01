@@ -1,0 +1,70 @@
+name: Native AOT bundles
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "gif320sharp-v*"
+
+jobs:
+  publish:
+    name: ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            archive: zip
+          - os: ubuntu-latest
+            rid: linux-x64
+            archive: tar
+          - os: macos-13
+            rid: osx-x64
+            archive: tar
+          - os: macos-14
+            rid: osx-arm64
+            archive: tar
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install Linux Native AOT toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev
+
+      - name: Publish Native AOT
+        run: >
+          dotnet publish Gif320Sharp/Gif320Sharp.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          -p:PublishAot=true
+          -p:SelfContained=true
+          -p:StripSymbols=true
+          -o artifacts/native-aot/${{ matrix.rid }}
+
+      - name: Archive zip
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path artifacts/native-aot/${{ matrix.rid }}/* -DestinationPath artifacts/gif320sharp-${{ matrix.rid }}.zip -Force
+
+      - name: Archive tar
+        if: matrix.archive == 'tar'
+        run: |
+          tar -C artifacts/native-aot/${{ matrix.rid }} -czf artifacts/gif320sharp-${{ matrix.rid }}.tar.gz .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gif320sharp-${{ matrix.rid }}
+          path: |
+            artifacts/gif320sharp-${{ matrix.rid }}.zip
+            artifacts/gif320sharp-${{ matrix.rid }}.tar.gz
+          if-no-files-found: ignore

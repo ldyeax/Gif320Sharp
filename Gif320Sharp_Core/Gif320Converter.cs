@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 
 namespace Gif320Sharp_Core
 {
@@ -65,6 +66,15 @@ namespace Gif320Sharp_Core
 			Gif320ConversionOptions? options = null
 		)
 		{
+			return Render(image, options, CancellationToken.None);
+		}
+
+		public Gif320RenderResult Render(
+			Gif320Image image,
+			Gif320ConversionOptions? options,
+			CancellationToken cancellationToken
+		)
+		{
 			if (image == null)
 			{
 				throw new ArgumentNullException(nameof(image));
@@ -77,7 +87,8 @@ namespace Gif320Sharp_Core
 				image.RgbPixels,
 				image.Width,
 				image.Height,
-				renderOptions
+				renderOptions,
+				cancellationToken
 			);
 		}
 
@@ -111,6 +122,11 @@ namespace Gif320Sharp_Core
 			renderOptions.CenterOnScreen = options.CenterOnScreen;
 			renderOptions.StartRow = options.StartRow;
 			renderOptions.StartColumn = options.StartColumn;
+			renderOptions.MaxReductionIterations = options.MaxReductionIterations;
+			renderOptions.AutoTuneFrequencyPreference = options.AutoTuneFrequencyPreference;
+			renderOptions.AutoTuneSmoothnessPreference = options.AutoTuneSmoothnessPreference;
+			renderOptions.AutoTuneGlyphReusePreference = options.AutoTuneGlyphReusePreference;
+			renderOptions.ReverseVideoInversionTolerance = options.ReverseVideoInversionTolerance;
 			renderOptions.GlyphReductionMode = options.AllowGlyphReduction
 				? Gif320GlyphReductionMode.VectorQuantization
 				: Gif320GlyphReductionMode.Exact;
@@ -123,8 +139,9 @@ namespace Gif320Sharp_Core
 
 			if (options.CellsX.HasValue || options.CellsY.HasValue)
 			{
-				renderOptions.CellsX = options.CellsX ?? 16;
-				renderOptions.CellsY = options.CellsY ?? 6;
+				(int cellsX, int cellsY) = ResolveConfiguredCellSize(image, options);
+				renderOptions.CellsX = cellsX;
+				renderOptions.CellsY = cellsY;
 				return renderOptions;
 			}
 
@@ -136,6 +153,45 @@ namespace Gif320Sharp_Core
 			}
 
 			return renderOptions;
+		}
+
+		private static (int cellsX, int cellsY) ResolveConfiguredCellSize(
+			Gif320Image image,
+			Gif320ConversionOptions options
+		)
+		{
+			int maxX = options.DoubleSize || options.FullScreenDouble
+				? Gif320RenderOptions.TerminalColumns / 2
+				: Gif320RenderOptions.TerminalColumns;
+			int maxY = options.DoubleSize || options.FullScreenDouble
+				? Gif320RenderOptions.TerminalRows / 2
+				: Gif320RenderOptions.TerminalRows;
+			int cellsX = options.CellsX ?? 16;
+			int cellsY = options.CellsY ?? 6;
+
+			if (options.DeriveCellsYFromX)
+			{
+				cellsY = (int)Math.Round(
+					cellsX
+						* Gif320RenderOptions.DisplayCellAspect
+						* image.Height
+						/ Math.Max(1, image.Width)
+				);
+			}
+			else if (options.DeriveCellsXFromY)
+			{
+				cellsX = (int)Math.Round(
+					cellsY
+						* image.Width
+						/ (Math.Max(1, image.Height)
+							* Gif320RenderOptions.DisplayCellAspect)
+				);
+			}
+
+			return (
+				Math.Clamp(cellsX, 1, maxX),
+				Math.Clamp(cellsY, 1, maxY)
+			);
 		}
 
 		private (int cellsX, int cellsY) EstimateOptimizedSize(
@@ -169,6 +225,11 @@ namespace Gif320Sharp_Core
 				DoubleSize = options.DoubleSize,
 				MaxGlyphs = options.MaxGlyphs,
 				AllowGlyphReduction = false,
+				MaxReductionIterations = options.MaxReductionIterations,
+				AutoTuneFrequencyPreference = options.AutoTuneFrequencyPreference,
+				AutoTuneSmoothnessPreference = options.AutoTuneSmoothnessPreference,
+				AutoTuneGlyphReusePreference = options.AutoTuneGlyphReusePreference,
+				ReverseVideoInversionTolerance = options.ReverseVideoInversionTolerance,
 				OptimizeSize = false,
 				IncludeTerminalSetup = false,
 				IncludeTerminalReset = false,

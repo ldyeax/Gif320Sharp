@@ -72,6 +72,7 @@ namespace Gif320Sharp_Core
 				sequence,
 				rows,
 				patterns,
+				null,
 				new Gif320ToneSettings
 				{
 					RedWeight = working.RedBalance,
@@ -84,6 +85,8 @@ namespace Gif320Sharp_Core
 				_lastCellsX,
 				_lastCellsY,
 				_currentGlyph,
+				0.0,
+				0.0,
 				0.0,
 				0.0
 			);

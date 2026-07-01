@@ -74,6 +74,7 @@ BenchmarkDotNet.Artifacts/
 project.lock.json
 project.fragment.lock.json
 artifacts/
+/Gif320Sharp_Gegl/build/
 
 # ASP.NET Scaffolding
 ScaffoldingReadMe.txt

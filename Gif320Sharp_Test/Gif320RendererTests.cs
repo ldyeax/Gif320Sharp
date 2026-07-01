@@ -30,6 +30,27 @@ namespace Gif320Sharp_Test
 		}
 
 		[TestMethod]
+		public void FullScreenDoubleLeavesDrcsDesignatedForG1()
+		{
+			byte[] image = CreateGradient(96, 48);
+			var renderer = new Gif320Renderer();
+
+			Gif320RenderResult result = renderer.RenderRgb(
+				image,
+				96,
+				48,
+				Gif320RenderOptions.FullScreenDouble()
+			);
+
+			StringAssert.Contains(result.VtSequence, "\u001b) @");
+			Assert.IsFalse(
+				result.VtSequence.Contains("\u001b)B"),
+				"Restoring G1 to ASCII makes already-written DRCS cells display as literal punctuation in consumers that track G1 at render time."
+			);
+			Assert.IsTrue(result.VtSequence.EndsWith("\u001b(B", StringComparison.Ordinal));
+		}
+
+		[TestMethod]
 		public void VectorQuantizationCapsGlyphCountWhenCellsAreUnique()
 		{
 			byte[] image = CreateNoisyImage(240, 72);
@@ -54,6 +75,77 @@ namespace Gif320Sharp_Test
 			Assert.IsTrue(result.WasGlyphReduced);
 			Assert.IsTrue(result.GlyphCount <= 12);
 			Assert.IsTrue(result.ReductionErrorPerCellPixel >= 0.0);
+			Assert.IsTrue(result.HighReductionErrorPerCellPixel >= 0.0);
+			Assert.IsTrue(result.HighReductionErrorPerCellPixel <= result.WorstReductionErrorPerCellPixel);
+			Assert.IsTrue(result.WorstReductionErrorPerCellPixel <= 1.0);
+		}
+
+		[TestMethod]
+		public void FullBrightCellUsesReverseVideoSpace()
+		{
+			byte[] image = CreateSolidImage(
+				Gif320RenderOptions.CellPixelWidth,
+				Gif320RenderOptions.CellPixelHeight,
+				255
+			);
+			var renderer = new Gif320Renderer();
+			var options = new Gif320RenderOptions
+			{
+				CellsX = 1,
+				CellsY = 1,
+				AutoTune = false,
+				ResizeMode = Gif320ResizeMode.Stretch,
+				ToneSettings = new Gif320ToneSettings
+				{
+					Threshold = 0.5,
+					DitherMode = Gif320DitherMode.Threshold,
+				},
+			};
+
+			Gif320RenderResult result = renderer.RenderRgb(
+				image,
+				Gif320RenderOptions.CellPixelWidth,
+				Gif320RenderOptions.CellPixelHeight,
+				options
+			);
+
+			Assert.AreEqual(0, result.GlyphCount);
+			Assert.AreEqual(" ", result.ScreenRows[0]);
+			Assert.IsTrue(result.ReverseVideoCells[0]);
+			StringAssert.Contains(result.VtSequence, "\u001b[7m \u001b[27m");
+		}
+
+		[TestMethod]
+		public void NearInvertedCellsReuseOneGlyphWithReverseVideo()
+		{
+			byte[] image = CreateInvertedPairImage();
+			var renderer = new Gif320Renderer();
+			var options = new Gif320RenderOptions
+			{
+				CellsX = 2,
+				CellsY = 1,
+				AutoTune = false,
+				ResizeMode = Gif320ResizeMode.Stretch,
+				ReverseVideoInversionTolerance = 1,
+				ToneSettings = new Gif320ToneSettings
+				{
+					Threshold = 0.5,
+					DitherMode = Gif320DitherMode.Threshold,
+				},
+			};
+
+			Gif320RenderResult result = renderer.RenderRgb(
+				image,
+				Gif320RenderOptions.CellPixelWidth * 2,
+				Gif320RenderOptions.CellPixelHeight,
+				options
+			);
+
+			Assert.AreEqual(1, result.GlyphCount);
+			Assert.AreEqual("!!", result.ScreenRows[0]);
+			Assert.IsFalse(result.ReverseVideoCells[0]);
+			Assert.IsTrue(result.ReverseVideoCells[1]);
+			StringAssert.Contains(result.VtSequence, "!\u001b[7m!\u001b[27m");
 		}
 
 		[TestMethod]
@@ -79,6 +171,84 @@ namespace Gif320Sharp_Test
 			Assert.IsFalse(string.IsNullOrEmpty(result.VtSequence));
 		}
 
+		[TestMethod]
+		public void ConverterCanDeriveCellHeightFromConfiguredWidth()
+		{
+			byte[] pixels = CreateGradient(160, 90);
+			var image = new Gif320Image(160, 90, pixels, colorCount: 0);
+			var converter = new Gif320Converter();
+			var options = new Gif320ConversionOptions
+			{
+				CellsX = 20,
+				DeriveCellsYFromX = true,
+				OptimizeSize = false,
+				AutoTune = false,
+				ResizeMode = Gif320ResizeMode.Stretch,
+				DitherMode = Gif320DitherMode.Threshold,
+			};
+
+			Gif320RenderResult result = converter.Render(image, options);
+
+			Assert.AreEqual(20, result.CellsX);
+			Assert.AreEqual(4, result.CellsY);
+		}
+
+		[TestMethod]
+		public void ConverterCanDeriveCellWidthFromConfiguredHeightUsingDisplayedAspect()
+		{
+			byte[] pixels = CreateGradient(100, 100);
+			var image = new Gif320Image(100, 100, pixels, colorCount: 0);
+			var converter = new Gif320Converter();
+			var options = new Gif320ConversionOptions
+			{
+				CellsY = 24,
+				DeriveCellsXFromY = true,
+				OptimizeSize = false,
+				AutoTune = false,
+				ResizeMode = Gif320ResizeMode.Stretch,
+				DitherMode = Gif320DitherMode.Threshold,
+			};
+
+			Gif320RenderResult result = converter.Render(image, options);
+
+			Assert.AreEqual(66, result.CellsX);
+			Assert.AreEqual(24, result.CellsY);
+		}
+
+		[TestMethod]
+		public void CoverResizeUsesDisplayedVt320AspectWhenSampling()
+		{
+			byte[] pixels = CreateHorizontalEdgeStrips(100, 100, stripHeight: 10);
+			var renderer = new Gif320Renderer();
+			var options = new Gif320RenderOptions
+			{
+				CellsX = 66,
+				CellsY = 24,
+				MaxGlyphs = 94,
+				AutoTune = false,
+				ResizeMode = Gif320ResizeMode.Cover,
+				ToneSettings = new Gif320ToneSettings
+				{
+					Threshold = 0.5,
+					DitherMode = Gif320DitherMode.Threshold,
+				},
+			};
+
+			Gif320RenderResult result = renderer.RenderRgb(pixels, 100, 100, options);
+
+			Assert.IsTrue(
+				result.ReverseVideoCells.Take(result.CellsX).All(value => value),
+				"The top source strip should remain visible instead of being cropped away by square-pixel target sampling."
+			);
+			Assert.IsTrue(
+				result.ReverseVideoCells
+					.Skip((result.CellsY - 1) * result.CellsX)
+					.Take(result.CellsX)
+					.All(value => value),
+				"The bottom source strip should remain visible instead of being cropped away by square-pixel target sampling."
+			);
+		}
+
 		private static byte[] CreateGradient(int width, int height)
 		{
 			var pixels = new byte[width * height * 3];
@@ -94,6 +264,63 @@ namespace Gif320Sharp_Test
 			}
 
 			return pixels;
+		}
+
+		private static byte[] CreateHorizontalEdgeStrips(int width, int height, int stripHeight)
+		{
+			var pixels = new byte[width * height * 3];
+			for (int y = 0; y < height; y++)
+			{
+				byte value = y < stripHeight || y >= height - stripHeight
+					? (byte)255
+					: (byte)0;
+				for (int x = 0; x < width; x++)
+				{
+					SetPixel(pixels, width, x, y, value);
+				}
+			}
+
+			return pixels;
+		}
+
+		private static byte[] CreateSolidImage(int width, int height, byte value)
+		{
+			var pixels = new byte[width * height * 3];
+			Array.Fill(pixels, value);
+			return pixels;
+		}
+
+		private static byte[] CreateInvertedPairImage()
+		{
+			int cellWidth = Gif320RenderOptions.CellPixelWidth;
+			int cellHeight = Gif320RenderOptions.CellPixelHeight;
+			int width = cellWidth * 2;
+			var pixels = new byte[width * cellHeight * 3];
+			for (int y = 0; y < cellHeight; y++)
+			{
+				for (int x = 0; x < cellWidth; x++)
+				{
+					bool leftOn = x == 3 || y == 5 || (x == y && x < cellHeight);
+					bool rightOn = !leftOn;
+					if (x == 0 && y == 0)
+					{
+						rightOn = leftOn;
+					}
+
+					SetPixel(pixels, width, x, y, leftOn ? (byte)255 : (byte)0);
+					SetPixel(pixels, width, x + cellWidth, y, rightOn ? (byte)255 : (byte)0);
+				}
+			}
+
+			return pixels;
+		}
+
+		private static void SetPixel(byte[] pixels, int width, int x, int y, byte value)
+		{
+			int offset = (y * width + x) * 3;
+			pixels[offset] = value;
+			pixels[offset + 1] = value;
+			pixels[offset + 2] = value;
 		}
 
 		private static byte[] CreateNoisyImage(int width, int height)

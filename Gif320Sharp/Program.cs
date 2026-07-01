@@ -1,6 +1,8 @@
 using System.Text;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using Gif320Sharp_Core;
 
 internal static class Program
@@ -20,7 +22,7 @@ internal static class Program
 	private const string LineDrawingOff = "\u001b(B";
 	private const int FullPreviewCellsX = Gif320RenderOptions.TerminalColumns;
 	private const int FullPreviewCellsY = Gif320RenderOptions.TerminalRows;
-	private const int DesiredControlsRows = 8;
+	private const int DesiredControlsRows = 12;
 	private const int BottomReservedRows = 3;
 	private const int StandardInputHandle = -10;
 	private const uint WaitObject0 = 0x00000000;
@@ -45,6 +47,10 @@ internal static class Program
 		RedBalance,
 		GreenBalance,
 		BlueBalance,
+		AutoTuneFrequencyPreference,
+		AutoTuneSmoothnessPreference,
+		AutoTuneGlyphReusePreference,
+		ReverseVideoInversionTolerance,
 	}
 
 	private sealed class SliderHitBox
@@ -191,13 +197,27 @@ internal static class Program
 			}
 
 			var converter = new Gif320Converter();
+			if (cli.RawPixelFormat.HasValue)
+			{
+				using Stream input = Console.OpenStandardInput();
+				Gif320Image rawImage = ReadRawImage(
+					input,
+					cli.RawWidth,
+					cli.RawHeight,
+					cli.RawPixelFormat.Value
+				);
+				Gif320RenderResult result = converter.Render(rawImage, cli.Conversion);
+				WriteResult(cli, result);
+				return 0;
+			}
+
 			if (cli.PipeMode)
 			{
 				using Stream input = Console.OpenStandardInput();
 				Gif320RenderResult result = UseOriginalPipeRenderer(cli.Conversion)
 					? converter.RenderGif320PipeCompatible(input, cli.Conversion)
 					: converter.RenderGif(input, cli.Conversion);
-				WriteSequence(Console.OpenStandardOutput(), result.VtSequence);
+				WriteResult(cli, result);
 				return 0;
 			}
 
@@ -211,7 +231,7 @@ internal static class Program
 			{
 				if (!string.IsNullOrEmpty(cli.OutputPath))
 				{
-					WriteFile(converter, file, cli.OutputPath, cli.Conversion);
+					WriteFile(converter, file, cli.OutputPath, cli.Conversion, cli.HexOutput);
 				}
 				else
 				{
@@ -235,6 +255,70 @@ internal static class Program
 			Console.Error.WriteLine("gif320: " + ex.Message);
 			return 1;
 		}
+	}
+
+	private static Gif320Image ReadRawImage(
+		Stream input,
+		int width,
+		int height,
+		Gif320PixelFormat pixelFormat
+	)
+	{
+		if (width <= 0 || height <= 0)
+		{
+			throw new ArgumentException("Raw image dimensions must be positive.");
+		}
+
+		int bytesPerPixel = pixelFormat switch
+		{
+			Gif320PixelFormat.Rgba32 => 4,
+			Gif320PixelFormat.Bgra32 => 4,
+			_ => throw new ArgumentOutOfRangeException(nameof(pixelFormat)),
+		};
+		byte[] raw = new byte[checked(width * height * bytesPerPixel)];
+		int offset = 0;
+		while (offset < raw.Length)
+		{
+			int read = input.Read(raw, offset, raw.Length - offset);
+			if (read == 0)
+			{
+				throw new IOException("Raw pixel stream ended before the expected byte count.");
+			}
+
+			offset += read;
+		}
+
+		var rgb = new byte[width * height * 3];
+		for (int source = 0, target = 0; source < raw.Length; source += 4, target += 3)
+		{
+			byte r;
+			byte g;
+			byte b;
+			if (pixelFormat == Gif320PixelFormat.Bgra32)
+			{
+				b = raw[source];
+				g = raw[source + 1];
+				r = raw[source + 2];
+			}
+			else
+			{
+				r = raw[source];
+				g = raw[source + 1];
+				b = raw[source + 2];
+			}
+
+			byte a = raw[source + 3];
+			rgb[target] = PremultiplyOverBlack(r, a);
+			rgb[target + 1] = PremultiplyOverBlack(g, a);
+			rgb[target + 2] = PremultiplyOverBlack(b, a);
+		}
+
+		return new Gif320Image(width, height, rgb, colorCount: 0);
+	}
+
+	private static byte PremultiplyOverBlack(byte color, byte alpha)
+	{
+		return (byte)((color * alpha + 127) / 255);
 	}
 
 	private static void RunInteractive(
@@ -340,6 +424,7 @@ internal static class Program
 				}
 
 				bool stateChangedByInput;
+				bool fastPreviewByInput;
 				string? line = ReadInteractiveCommand(
 					previewMode,
 					ref layout,
@@ -363,7 +448,8 @@ internal static class Program
 					options,
 					ref activeSlider,
 					useStreamInput,
-					out stateChangedByInput
+					out stateChangedByInput,
+					out fastPreviewByInput
 				);
 			if (line == null)
 			{
@@ -384,7 +470,8 @@ internal static class Program
 					bottom,
 					previewMode,
 					layout,
-					sliderHitBoxes
+					sliderHitBoxes,
+					fastPreviewByInput
 				);
 				continue;
 			}
@@ -602,7 +689,8 @@ internal static class Program
 		int bottom,
 		PreviewMode previewMode,
 		TerminalLayout layout,
-		List<SliderHitBox> sliderHitBoxes
+		List<SliderHitBox> sliderHitBoxes,
+		bool fastPreview = false
 	)
 	{
 		Gif320RenderResult result = RenderPreview(
@@ -613,7 +701,8 @@ internal static class Program
 			top,
 			right,
 			bottom,
-			previewMode
+			previewMode,
+			fastPreview
 		);
 
 		Console.Write(HomeCursor);
@@ -650,12 +739,34 @@ internal static class Program
 		int top,
 		int right,
 		int bottom,
-		PreviewMode previewMode
+		PreviewMode previewMode,
+		bool fastPreview = false,
+		CancellationToken cancellationToken = default
 	)
 	{
 		return previewMode == PreviewMode.Full80x24
-			? RenderFullScreenPreview(converter, image, options, left, top, right, bottom)
-			: RenderClassicSketch(converter, image, options, left, top, right, bottom);
+			? RenderFullScreenPreview(
+				converter,
+				image,
+				options,
+				left,
+				top,
+				right,
+				bottom,
+				fastPreview,
+				cancellationToken
+			)
+			: RenderClassicSketch(
+				converter,
+				image,
+				options,
+				left,
+				top,
+				right,
+				bottom,
+				fastPreview,
+				cancellationToken
+			);
 	}
 
 	private static Gif320RenderResult RenderClassicSketch(
@@ -665,7 +776,9 @@ internal static class Program
 		int left,
 		int top,
 		int right,
-		int bottom
+		int bottom,
+		bool fastPreview = false,
+		CancellationToken cancellationToken = default
 	)
 	{
 		Gif320ConversionOptions sketch = options.Clone();
@@ -680,7 +793,12 @@ internal static class Program
 		sketch.CenterOnScreen = false;
 		sketch.StartRow = 1;
 		sketch.StartColumn = 1;
-		return converter.Render(Crop(image, left, top, right, bottom), sketch);
+		if (fastPreview)
+		{
+			sketch.MaxReductionIterations = 1;
+		}
+
+		return converter.Render(Crop(image, left, top, right, bottom), sketch, cancellationToken);
 	}
 
 	private static Gif320RenderResult RenderFullScreenPreview(
@@ -690,7 +808,9 @@ internal static class Program
 		int left,
 		int top,
 		int right,
-		int bottom
+		int bottom,
+		bool fastPreview = false,
+		CancellationToken cancellationToken = default
 	)
 	{
 		Gif320ConversionOptions fullScreen = options.Clone();
@@ -705,7 +825,16 @@ internal static class Program
 		fullScreen.CenterOnScreen = false;
 		fullScreen.StartRow = 1;
 		fullScreen.StartColumn = 1;
-		return converter.Render(Crop(image, left, top, right, bottom), fullScreen);
+		if (fastPreview)
+		{
+			fullScreen.MaxReductionIterations = 1;
+		}
+
+		return converter.Render(
+			Crop(image, left, top, right, bottom),
+			fullScreen,
+			cancellationToken
+		);
 	}
 
 	private static bool ApplyAdvancedInteractiveTune(
@@ -737,23 +866,70 @@ internal static class Program
 
 		WriteStatus(
 			layout,
-			$"Running advanced tune for {FormatPreviewMode(tuningMode)} preview..."
+			$"Running advanced tune for {FormatPreviewMode(tuningMode)} preview... Esc/q cancels."
 		);
 
 		Gif320ConversionOptions tuning = options.Clone();
 		tuning.AutoTune = true;
 		tuning.ToneSettingsOverride = null;
 		tuning.AllowGlyphReduction = true;
-		Gif320RenderResult tuned = RenderPreview(
-			converter,
-			image,
-			tuning,
-			left,
-			top,
-			right,
-			bottom,
-			tuningMode
+		using var cancellation = new CancellationTokenSource();
+		Task<Gif320RenderResult> tuneTask = Task.Run(
+			() => RenderPreview(
+				converter,
+				image,
+				tuning,
+				left,
+				top,
+				right,
+				bottom,
+				tuningMode,
+				fastPreview: false,
+				cancellation.Token
+			),
+			cancellation.Token
 		);
+
+		Stream? input = null;
+		IntPtr inputHandle = IntPtr.Zero;
+		if (!Console.IsInputRedirected)
+		{
+			if (OperatingSystem.IsWindows() && TryGetConsoleInputHandle(out inputHandle))
+			{
+				input = Console.OpenStandardInput();
+			}
+		}
+
+		char[] spinner = { '-', '\\', '|', '/' };
+		int tick = 0;
+		while (!tuneTask.IsCompleted)
+		{
+			if (TryReadTuneCancelKey(input, inputHandle))
+			{
+				cancellation.Cancel();
+				WriteStatus(layout, "Canceling advanced tune...");
+			}
+			else
+			{
+				WriteStatus(
+					layout,
+					$"Running advanced tune {spinner[tick++ % spinner.Length]} Esc/q cancels."
+				);
+			}
+
+			Thread.Sleep(100);
+		}
+
+		Gif320RenderResult tuned;
+		try
+		{
+			tuned = tuneTask.GetAwaiter().GetResult();
+		}
+		catch (OperationCanceledException)
+		{
+			WriteStatus(layout, "Advanced tune canceled.");
+			return false;
+		}
 
 		options.ToneSettingsOverride = tuned.ToneSettings.Clone();
 		options.AutoTune = false;
@@ -786,6 +962,36 @@ internal static class Program
 	private static string FormatPreviewMode(PreviewMode previewMode)
 	{
 		return previewMode == PreviewMode.Full80x24 ? "80x24" : "old";
+	}
+
+	private static bool TryReadTuneCancelKey(Stream? input, IntPtr inputHandle)
+	{
+		if (Console.IsInputRedirected)
+		{
+			return false;
+		}
+
+		if (OperatingSystem.IsWindows() && input != null && inputHandle != IntPtr.Zero)
+		{
+			if (!WaitForInput(inputHandle, timeoutMilliseconds: 0))
+			{
+				return false;
+			}
+
+			int value = input.ReadByte();
+			return value is 3 or 27 or 'q' or 'Q';
+		}
+
+		if (!Console.KeyAvailable)
+		{
+			return false;
+		}
+
+		ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+		return key.Key == ConsoleKey.Escape
+			|| key.Key == ConsoleKey.Q
+			|| (key.Key == ConsoleKey.C
+				&& (key.Modifiers & ConsoleModifiers.Control) == ConsoleModifiers.Control);
 	}
 
 	private static Gif320RenderResult RenderOptimized(
@@ -1128,14 +1334,52 @@ internal static class Program
 			int length = Math.Min(columns, row.Length - firstColumn);
 			AppendCursorMove(builder, startRow + i, startColumn);
 			builder.Append("\u001b#5");
-			builder.Append(row.Substring(firstColumn, length));
+			AppendPreviewRow(
+				builder,
+				row,
+				result.ReverseVideoCells,
+				sourceRow,
+				firstColumn,
+				length,
+				result.CellsX
+			);
 		}
 
 		builder.Append('\u000f');
+		builder.Append("\u001b[27m");
 		builder.Append(StandoutOff);
 		builder.Append("\u001b(B");
-		builder.Append("\u001b)B");
 		return builder.ToString();
+	}
+
+	private static void AppendPreviewRow(
+		StringBuilder builder,
+		string row,
+		bool[] reverseVideoCells,
+		int rowIndex,
+		int firstColumn,
+		int length,
+		int cellsX
+	)
+	{
+		bool reverseVideo = false;
+		int cellOffset = rowIndex * cellsX + firstColumn;
+		for (int x = 0; x < length; x++)
+		{
+			bool nextReverseVideo = reverseVideoCells[cellOffset + x];
+			if (nextReverseVideo != reverseVideo)
+			{
+				builder.Append(nextReverseVideo ? "\u001b[7m" : "\u001b[27m");
+				reverseVideo = nextReverseVideo;
+			}
+
+			builder.Append(row[firstColumn + x]);
+		}
+
+		if (reverseVideo)
+		{
+			builder.Append("\u001b[27m");
+		}
 	}
 
 	private static void DrawClassicPreviewFrame(TerminalLayout layout)
@@ -1265,6 +1509,66 @@ internal static class Program
 			return;
 		}
 
+		WriteSlider(
+			row++,
+			"Tune freq",
+			options.AutoTuneFrequencyPreference,
+			-100,
+			100,
+			SliderKind.AutoTuneFrequencyPreference,
+			layout,
+			sliderHitBoxes
+		);
+		if (row > layout.ControlsEndRow)
+		{
+			return;
+		}
+
+		WriteSlider(
+			row++,
+			"Tune smooth",
+			options.AutoTuneSmoothnessPreference,
+			-100,
+			100,
+			SliderKind.AutoTuneSmoothnessPreference,
+			layout,
+			sliderHitBoxes
+		);
+		if (row > layout.ControlsEndRow)
+		{
+			return;
+		}
+
+		WriteSlider(
+			row++,
+			"Glyph reuse",
+			options.AutoTuneGlyphReusePreference,
+			-100,
+			100,
+			SliderKind.AutoTuneGlyphReusePreference,
+			layout,
+			sliderHitBoxes
+		);
+		if (row > layout.ControlsEndRow)
+		{
+			return;
+		}
+
+		WriteSlider(
+			row++,
+			"Invert tol",
+			options.ReverseVideoInversionTolerance,
+			0,
+			12,
+			SliderKind.ReverseVideoInversionTolerance,
+			layout,
+			sliderHitBoxes
+		);
+		if (row > layout.ControlsEndRow)
+		{
+			return;
+		}
+
 		WriteLeftRight(
 			row,
 			"Hotkeys: z/x zoom  h/j/k/l pan  f reset  a tune  o optimize",
@@ -1286,7 +1590,13 @@ internal static class Program
 	{
 		int width = layout.Width;
 		int labelWidth = Math.Min(12, Math.Max(4, width / 4));
-		int valueWidth = Math.Max(3, maximum.ToString(CultureInfo.InvariantCulture).Length);
+		int valueWidth = Math.Max(
+			3,
+			Math.Max(
+				minimum.ToString(CultureInfo.InvariantCulture).Length,
+				maximum.ToString(CultureInfo.InvariantCulture).Length
+			)
+		);
 		int fixedWidth = labelWidth + 8 + valueWidth;
 		int barWidth = Math.Min(32, Math.Max(3, width - fixedWidth));
 		string labelText = Clip(label, labelWidth).PadRight(labelWidth);
@@ -1342,7 +1652,7 @@ internal static class Program
 	private static void WriteProgramInfo(TerminalLayout layout)
 	{
 		WriteAt(layout.MessageRow, 1, Clip(
-			"Drag bars/click arrows for tone; hotkeys run immediately; Esc opens command input.",
+			"Drag bars/click arrows for tone/tune bias; press a to rerun advanced tune; Esc opens commands.",
 			layout.Width
 		));
 	}
@@ -1382,10 +1692,12 @@ internal static class Program
 		Gif320ConversionOptions options,
 		ref SliderKind? activeSlider,
 		bool useStreamInput,
-		out bool stateChanged
+		out bool stateChanged,
+		out bool fastPreview
 	)
 	{
 		stateChanged = false;
+		fastPreview = false;
 		if (Console.IsInputRedirected)
 		{
 			WritePrompt(previewMode, layout);
@@ -1402,7 +1714,8 @@ internal static class Program
 				sliderHitBoxes,
 				options,
 				ref activeSlider,
-				out stateChanged
+				out stateChanged,
+				out fastPreview
 			);
 		}
 
@@ -1455,6 +1768,7 @@ internal static class Program
 					))
 					{
 						stateChanged = true;
+						fastPreview = activeSlider.HasValue;
 						return string.Empty;
 					}
 
@@ -1491,10 +1805,12 @@ internal static class Program
 		List<SliderHitBox> sliderHitBoxes,
 		Gif320ConversionOptions options,
 		ref SliderKind? activeSlider,
-		out bool stateChanged
+		out bool stateChanged,
+		out bool fastPreview
 	)
 	{
 		stateChanged = false;
+		fastPreview = false;
 		Stream input = Console.OpenStandardInput();
 		WriteHotkeyPrompt(previewMode, layout);
 		while (true)
@@ -1538,6 +1854,7 @@ internal static class Program
 					))
 					{
 						stateChanged = true;
+						fastPreview = activeSlider.HasValue;
 						return string.Empty;
 					}
 
@@ -1941,8 +2258,9 @@ internal static class Program
 
 		if (mouseEvent.Released)
 		{
+			bool wasDragging = activeSlider.HasValue;
 			activeSlider = null;
-			return false;
+			return wasDragging;
 		}
 
 		SliderHitBox? hitBox = FindSliderHitBox(mouseEvent, sliderHitBoxes);
@@ -2066,6 +2384,10 @@ internal static class Program
 			SliderKind.RedBalance => options.RedBalance,
 			SliderKind.GreenBalance => options.GreenBalance,
 			SliderKind.BlueBalance => options.BlueBalance,
+			SliderKind.AutoTuneFrequencyPreference => options.AutoTuneFrequencyPreference,
+			SliderKind.AutoTuneSmoothnessPreference => options.AutoTuneSmoothnessPreference,
+			SliderKind.AutoTuneGlyphReusePreference => options.AutoTuneGlyphReusePreference,
+			SliderKind.ReverseVideoInversionTolerance => options.ReverseVideoInversionTolerance,
 			_ => 0,
 		};
 	}
@@ -2081,6 +2403,10 @@ internal static class Program
 		int oldRed = options.RedBalance;
 		int oldGreen = options.GreenBalance;
 		int oldBlue = options.BlueBalance;
+		int oldFrequency = options.AutoTuneFrequencyPreference;
+		int oldSmoothness = options.AutoTuneSmoothnessPreference;
+		int oldGlyphReuse = options.AutoTuneGlyphReusePreference;
+		int oldInvertTolerance = options.ReverseVideoInversionTolerance;
 
 		switch (kind)
 		{
@@ -2107,20 +2433,49 @@ internal static class Program
 			case SliderKind.BlueBalance:
 				options.BlueBalance = Math.Max(0, value);
 				break;
+			case SliderKind.AutoTuneFrequencyPreference:
+				options.AutoTuneFrequencyPreference = Math.Clamp(value, -100, 100);
+				break;
+			case SliderKind.AutoTuneSmoothnessPreference:
+				options.AutoTuneSmoothnessPreference = Math.Clamp(value, -100, 100);
+				break;
+			case SliderKind.AutoTuneGlyphReusePreference:
+				options.AutoTuneGlyphReusePreference = Math.Clamp(value, -100, 100);
+				break;
+			case SliderKind.ReverseVideoInversionTolerance:
+				options.ReverseVideoInversionTolerance = Math.Clamp(
+					value,
+					0,
+					Gif320RenderOptions.CellPixelWidth * Gif320RenderOptions.CellPixelHeight
+				);
+				break;
 		}
 
 		bool changed = oldFull != options.FullThreshold
 			|| oldHalf != options.HalfThreshold
 			|| oldRed != options.RedBalance
 			|| oldGreen != options.GreenBalance
-			|| oldBlue != options.BlueBalance;
-		if (changed)
+			|| oldBlue != options.BlueBalance
+			|| oldFrequency != options.AutoTuneFrequencyPreference
+			|| oldSmoothness != options.AutoTuneSmoothnessPreference
+			|| oldGlyphReuse != options.AutoTuneGlyphReusePreference
+			|| oldInvertTolerance != options.ReverseVideoInversionTolerance;
+		if (changed && IsManualToneSlider(kind))
 		{
 			options.AutoTune = false;
 			options.ToneSettingsOverride = null;
 		}
 
 		return changed;
+	}
+
+	private static bool IsManualToneSlider(SliderKind kind)
+	{
+		return kind is SliderKind.FullThreshold
+			or SliderKind.HalfThreshold
+			or SliderKind.RedBalance
+			or SliderKind.GreenBalance
+			or SliderKind.BlueBalance;
 	}
 
 	private static string? ReadCommandLineWithResize(
@@ -2412,11 +2767,20 @@ internal static class Program
 		Gif320Converter converter,
 		string inputPath,
 		string outputPath,
-		Gif320ConversionOptions options
+		Gif320ConversionOptions options,
+		bool hexOutput
 	)
 	{
 		Gif320RenderResult result = converter.RenderGifFile(inputPath, options);
-		File.WriteAllText(outputPath, result.VtSequence, Encoding.ASCII);
+		using Stream output = File.Create(outputPath);
+		if (hexOutput)
+		{
+			WriteSequenceHex(output, result.VtSequence);
+		}
+		else
+		{
+			WriteSequence(output, result.VtSequence);
+		}
 	}
 
 	private static CliOptions ParseArgs(string[] args)
@@ -2461,25 +2825,96 @@ internal static class Program
 				case "-o":
 					cli.OutputPath = RequireValue(args, ref i, arg);
 					break;
+				case "--hex":
+				case "--ascii-hex":
+					cli.HexOutput = true;
+					break;
+				case "--raw-rgba":
+					cli.RawPixelFormat = Gif320PixelFormat.Rgba32;
+					cli.RawWidth = ParseInt(RequireValue(args, ref i, arg));
+					cli.RawHeight = ParseInt(RequireValue(args, ref i, arg));
+					break;
+				case "--raw-bgra":
+					cli.RawPixelFormat = Gif320PixelFormat.Bgra32;
+					cli.RawWidth = ParseInt(RequireValue(args, ref i, arg));
+					cli.RawHeight = ParseInt(RequireValue(args, ref i, arg));
+					break;
 				case "--cells":
-					cli.Conversion.CellsX = int.Parse(RequireValue(args, ref i, arg));
-					cli.Conversion.CellsY = int.Parse(RequireValue(args, ref i, arg));
+					cli.Conversion.CellsX = ParseInt(RequireValue(args, ref i, arg));
+					cli.Conversion.CellsY = ParseInt(RequireValue(args, ref i, arg));
 					cli.Conversion.OptimizeSize = false;
+					break;
+				case "--cells-width":
+				case "--columns":
+					cli.Conversion.CellsX = ParseInt(RequireValue(args, ref i, arg));
+					cli.Conversion.CellsY = null;
+					cli.Conversion.DeriveCellsYFromX = true;
+					cli.Conversion.DeriveCellsXFromY = false;
+					cli.Conversion.OptimizeSize = false;
+					break;
+				case "--cells-height":
+				case "--rows":
+					cli.Conversion.CellsY = ParseInt(RequireValue(args, ref i, arg));
+					cli.Conversion.CellsX = null;
+					cli.Conversion.DeriveCellsXFromY = true;
+					cli.Conversion.DeriveCellsYFromX = false;
+					cli.Conversion.OptimizeSize = false;
+					break;
+				case "--max-glyphs":
+				case "--glyphs":
+					cli.Conversion.MaxGlyphs = ParseInt(RequireValue(args, ref i, arg));
+					break;
+				case "--dither":
+					cli.Conversion.DitherMode = ParseDitherMode(RequireValue(args, ref i, arg));
+					break;
+				case "--resize":
+					cli.Conversion.ResizeMode = ParseResizeMode(RequireValue(args, ref i, arg));
 					break;
 				case "--threshold":
 				case "--thresholds":
-					cli.Conversion.FullThreshold = int.Parse(RequireValue(args, ref i, arg));
-					cli.Conversion.HalfThreshold = int.Parse(RequireValue(args, ref i, arg));
+					cli.Conversion.FullThreshold = ParseInt(RequireValue(args, ref i, arg));
+					cli.Conversion.HalfThreshold = ParseInt(RequireValue(args, ref i, arg));
 					cli.Conversion.AutoTune = false;
 					break;
 				case "--balance":
-					cli.Conversion.RedBalance = int.Parse(RequireValue(args, ref i, arg));
-					cli.Conversion.GreenBalance = int.Parse(RequireValue(args, ref i, arg));
-					cli.Conversion.BlueBalance = int.Parse(RequireValue(args, ref i, arg));
+					cli.Conversion.RedBalance = ParseInt(RequireValue(args, ref i, arg));
+					cli.Conversion.GreenBalance = ParseInt(RequireValue(args, ref i, arg));
+					cli.Conversion.BlueBalance = ParseInt(RequireValue(args, ref i, arg));
 					cli.Conversion.AutoTune = false;
 					break;
 				case "--ratio":
-					cli.Conversion.Ratio = double.Parse(RequireValue(args, ref i, arg));
+					cli.Conversion.Ratio = ParseDouble(RequireValue(args, ref i, arg));
+					break;
+				case "--tune-frequency":
+				case "--freq-pref":
+					cli.Conversion.AutoTuneFrequencyPreference = ParseInt(RequireValue(args, ref i, arg));
+					break;
+				case "--tune-smoothness":
+				case "--smooth-pref":
+					cli.Conversion.AutoTuneSmoothnessPreference = ParseInt(RequireValue(args, ref i, arg));
+					break;
+				case "--tune-glyph-reuse":
+				case "--reuse-pref":
+					cli.Conversion.AutoTuneGlyphReusePreference = ParseInt(RequireValue(args, ref i, arg));
+					break;
+				case "--invert-tolerance":
+				case "--reverse-video-tolerance":
+					cli.Conversion.ReverseVideoInversionTolerance = ParseInt(
+						RequireValue(args, ref i, arg)
+					);
+					break;
+				case "--no-setup":
+					cli.Conversion.IncludeTerminalSetup = false;
+					break;
+				case "--no-reset":
+					cli.Conversion.IncludeTerminalReset = false;
+					break;
+				case "--no-center":
+					cli.Conversion.CenterOnScreen = false;
+					break;
+				case "--start":
+					cli.Conversion.StartRow = ParseInt(RequireValue(args, ref i, arg));
+					cli.Conversion.StartColumn = ParseInt(RequireValue(args, ref i, arg));
 					break;
 				default:
 					if (arg.StartsWith("-", StringComparison.Ordinal))
@@ -2495,6 +2930,28 @@ internal static class Program
 		return cli;
 	}
 
+	private static Gif320DitherMode ParseDitherMode(string value)
+	{
+		return value.ToLowerInvariant() switch
+		{
+			"threshold" or "none" => Gif320DitherMode.Threshold,
+			"checkerboard" or "checker" => Gif320DitherMode.Checkerboard,
+			"floyd-steinberg" or "floydsteinberg" or "fs" => Gif320DitherMode.FloydSteinberg,
+			_ => throw new ArgumentException("unknown dither mode " + value),
+		};
+	}
+
+	private static Gif320ResizeMode ParseResizeMode(string value)
+	{
+		return value.ToLowerInvariant() switch
+		{
+			"stretch" => Gif320ResizeMode.Stretch,
+			"contain" or "fit" => Gif320ResizeMode.Contain,
+			"cover" or "crop" => Gif320ResizeMode.Cover,
+			_ => throw new ArgumentException("unknown resize mode " + value),
+		};
+	}
+
 	private static string RequireValue(string[] args, ref int index, string option)
 	{
 		index++;
@@ -2506,10 +2963,64 @@ internal static class Program
 		return args[index];
 	}
 
+	private static int ParseInt(string value)
+	{
+		return int.Parse(value, CultureInfo.InvariantCulture);
+	}
+
+	private static double ParseDouble(string value)
+	{
+		return double.Parse(value, CultureInfo.InvariantCulture);
+	}
+
 	private static void WriteSequence(Stream output, string sequence)
 	{
 		byte[] bytes = Encoding.ASCII.GetBytes(sequence);
 		output.Write(bytes, 0, bytes.Length);
+	}
+
+	private static void WriteSequenceHex(Stream output, string sequence)
+	{
+		byte[] bytes = Encoding.ASCII.GetBytes(sequence);
+		for (int i = 0; i < bytes.Length; i++)
+		{
+			if (i > 0)
+			{
+				output.WriteByte((byte)' ');
+			}
+
+			string hex = bytes[i].ToString("x2", CultureInfo.InvariantCulture);
+			output.WriteByte((byte)hex[0]);
+			output.WriteByte((byte)hex[1]);
+		}
+	}
+
+	private static void WriteResult(CliOptions cli, Gif320RenderResult result)
+	{
+		if (string.IsNullOrEmpty(cli.OutputPath))
+		{
+			Stream output = Console.OpenStandardOutput();
+			if (cli.HexOutput)
+			{
+				WriteSequenceHex(output, result.VtSequence);
+			}
+			else
+			{
+				WriteSequence(output, result.VtSequence);
+			}
+
+			return;
+		}
+
+		using Stream file = File.Create(cli.OutputPath);
+		if (cli.HexOutput)
+		{
+			WriteSequenceHex(file, result.VtSequence);
+		}
+		else
+		{
+			WriteSequence(file, result.VtSequence);
+		}
 	}
 
 	private static bool UseOriginalPipeRenderer(Gif320ConversionOptions options)
@@ -2525,16 +3036,29 @@ internal static class Program
 	private static void Usage(TextWriter writer)
 	{
 		writer.WriteLine("usage: gif320 -p < giffile");
+		writer.WriteLine("or:    gif320 --raw-rgba <w> <h> [options] < pixels.rgba");
 		writer.WriteLine("or:    gif320 <inputfile> ...");
 		writer.WriteLine();
 		writer.WriteLine("extra managed options:");
 		writer.WriteLine("  --output <file>       render non-interactively");
+		writer.WriteLine("  --hex                 output bytes as ASCII hex pairs");
+		writer.WriteLine("  --raw-rgba <w> <h>    read raw RGBA pixels from stdin");
+		writer.WriteLine("  --raw-bgra <w> <h>    read raw BGRA pixels from stdin");
 		writer.WriteLine("  --full-screen         render 40x12 double-width/double-height");
 		writer.WriteLine("  --double              use double-width/double-height line attributes");
 		writer.WriteLine("  --cells <x> <y>       render a specific logical cell size");
+		writer.WriteLine("  --cells-width <x>     set columns and derive rows from source aspect");
+		writer.WriteLine("  --cells-height <y>    set rows and derive columns from source aspect");
+		writer.WriteLine("  --max-glyphs <n>      set DRCS character budget");
+		writer.WriteLine("  --dither <mode>       threshold, checkerboard, or floyd-steinberg");
+		writer.WriteLine("  --resize <mode>       stretch, contain, or cover");
 		writer.WriteLine("  --threshold <f> <h>   set original GIF320 thresholds and disable auto tune");
 		writer.WriteLine("  --balance <r> <g> <b> set original GIF320 balance and disable auto tune");
 		writer.WriteLine("  --ratio <ratio>       set optimisation aspect ratio");
+		writer.WriteLine("  --tune-frequency <n>  prefer high frequency (>0) or low frequency (<0)");
+		writer.WriteLine("  --tune-smoothness <n> prefer smooth lines (>0) or inner detail (<0)");
+		writer.WriteLine("  --tune-glyph-reuse <n> prefer fewer glyphs (>0) or fidelity (<0)");
+		writer.WriteLine("  --invert-tolerance <n> reuse nearly inverted character chunks");
 		writer.WriteLine("  --no-auto             disable automatic image tuning");
 		writer.WriteLine("  --interactive-compat  use old deterministic interactive startup");
 		writer.WriteLine("  --no-reduce           fail instead of quantizing when cells exceed glyph budget");
@@ -2547,6 +3071,14 @@ internal static class Program
 		public bool ShowHelp { get; set; }
 
 		public bool InteractiveCompatibilityMode { get; set; }
+
+		public bool HexOutput { get; set; }
+
+		public Gif320PixelFormat? RawPixelFormat { get; set; }
+
+		public int RawWidth { get; set; }
+
+		public int RawHeight { get; set; }
 
 		public string OutputPath { get; set; } = string.Empty;
 

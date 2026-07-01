@@ -26,9 +26,23 @@ namespace Gif320Sharp_Core
 
 		public int? CellsY { get; set; }
 
+		public bool DeriveCellsYFromX { get; set; }
+
+		public bool DeriveCellsXFromY { get; set; }
+
 		public int MaxGlyphs { get; set; } = 94;
 
 		public bool AllowGlyphReduction { get; set; } = true;
+
+		public int MaxReductionIterations { get; set; } = 18;
+
+		public int AutoTuneFrequencyPreference { get; set; }
+
+		public int AutoTuneSmoothnessPreference { get; set; }
+
+		public int AutoTuneGlyphReusePreference { get; set; }
+
+		public int ReverseVideoInversionTolerance { get; set; } = 4;
 
 		public bool OptimizeSize { get; set; } = true;
 
@@ -63,8 +77,15 @@ namespace Gif320Sharp_Core
 				FullScreenDouble = FullScreenDouble,
 				CellsX = CellsX,
 				CellsY = CellsY,
+				DeriveCellsYFromX = DeriveCellsYFromX,
+				DeriveCellsXFromY = DeriveCellsXFromY,
 				MaxGlyphs = MaxGlyphs,
 				AllowGlyphReduction = AllowGlyphReduction,
+				MaxReductionIterations = MaxReductionIterations,
+				AutoTuneFrequencyPreference = AutoTuneFrequencyPreference,
+				AutoTuneSmoothnessPreference = AutoTuneSmoothnessPreference,
+				AutoTuneGlyphReusePreference = AutoTuneGlyphReusePreference,
+				ReverseVideoInversionTolerance = ReverseVideoInversionTolerance,
 				OptimizeSize = OptimizeSize,
 				IncludeTerminalSetup = IncludeTerminalSetup,
 				IncludeTerminalReset = IncludeTerminalReset,
@@ -105,6 +126,48 @@ namespace Gif320Sharp_Core
 			if (MaxGlyphs <= 0 || MaxGlyphs > 94)
 			{
 				throw new ArgumentOutOfRangeException(nameof(MaxGlyphs));
+			}
+
+			if (DeriveCellsYFromX && DeriveCellsXFromY)
+			{
+				throw new ArgumentException("Only one automatic cell dimension can be enabled.");
+			}
+
+			if (DeriveCellsYFromX && !CellsX.HasValue)
+			{
+				throw new ArgumentException("Automatic cell height requires a fixed cell width.");
+			}
+
+			if (DeriveCellsXFromY && !CellsY.HasValue)
+			{
+				throw new ArgumentException("Automatic cell width requires a fixed cell height.");
+			}
+
+			if (MaxReductionIterations <= 0)
+			{
+				throw new ArgumentOutOfRangeException(nameof(MaxReductionIterations));
+			}
+
+			if (AutoTuneFrequencyPreference < -100 || AutoTuneFrequencyPreference > 100)
+			{
+				throw new ArgumentOutOfRangeException(nameof(AutoTuneFrequencyPreference));
+			}
+
+			if (AutoTuneSmoothnessPreference < -100 || AutoTuneSmoothnessPreference > 100)
+			{
+				throw new ArgumentOutOfRangeException(nameof(AutoTuneSmoothnessPreference));
+			}
+
+			if (AutoTuneGlyphReusePreference < -100 || AutoTuneGlyphReusePreference > 100)
+			{
+				throw new ArgumentOutOfRangeException(nameof(AutoTuneGlyphReusePreference));
+			}
+
+			if (ReverseVideoInversionTolerance < 0
+				|| ReverseVideoInversionTolerance > Gif320RenderOptions.CellPixelWidth
+					* Gif320RenderOptions.CellPixelHeight)
+			{
+				throw new ArgumentOutOfRangeException(nameof(ReverseVideoInversionTolerance));
 			}
 
 			if (StartRow <= 0)

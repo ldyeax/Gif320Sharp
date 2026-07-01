@@ -1,12 +1,14 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-	<TargetFramework>netstandard2.1</TargetFramework>
+	<TargetFrameworks Condition="'$(PublishAot)' != 'true'">netstandard2.1;net10.0</TargetFrameworks>
+	<TargetFrameworks Condition="'$(PublishAot)' == 'true'">net10.0</TargetFrameworks>
 	<Nullable>enable</Nullable>
 	<AssemblyName>Gif320Sharp_Core</AssemblyName>
 	<RootNamespace>Gif320Sharp_Core</RootNamespace>
 	<PackageId>Gif320Sharp_Core</PackageId>
 	<InGameTerminalCopyToUnityAssemblies>true</InGameTerminalCopyToUnityAssemblies>
+	<IsAotCompatible Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">true</IsAotCompatible>
   </PropertyGroup>
 
 </Project>
