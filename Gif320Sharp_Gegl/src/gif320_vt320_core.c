@@ -447,6 +447,215 @@ static int pattern_distance(
 	return distance;
 }
 
+static int hex_value(int value)
+{
+	if (value >= '0' && value <= '9')
+	{
+		return value - '0';
+	}
+
+	if (value >= 'a' && value <= 'f')
+	{
+		return value - 'a' + 10;
+	}
+
+	if (value >= 'A' && value <= 'F')
+	{
+		return value - 'A' + 10;
+	}
+
+	return -1;
+}
+
+static int lower_ascii(int value)
+{
+	return value >= 'A' && value <= 'Z' ? value + ('a' - 'A') : value;
+}
+
+static bool starts_with_ignore_case(const char *text, const char *prefix)
+{
+	for (int i = 0; prefix[i] != '\0'; i++)
+	{
+		if (text[i] == '\0'
+			|| lower_ascii((unsigned char)text[i])
+				!= lower_ascii((unsigned char)prefix[i]))
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static bool parse_manual_atlas(
+	const char *text,
+	unsigned char **patterns,
+	int *pattern_count
+)
+{
+	static const char prefix[] = "gif320-atlas-v1:";
+	size_t prefix_length = sizeof(prefix) - 1;
+	unsigned char *parsed;
+	char token[GIF320_CELL_PATTERN_BYTES * 2];
+	int token_length = 0;
+	int count = 0;
+
+	*patterns = NULL;
+	*pattern_count = 0;
+	if (text == NULL || text[0] == '\0')
+	{
+		return true;
+	}
+
+	if (starts_with_ignore_case(text, prefix))
+	{
+		text += prefix_length;
+	}
+
+	parsed = (unsigned char *)calloc(
+		94,
+		GIF320_CELL_PATTERN_BYTES
+	);
+	if (parsed == NULL)
+	{
+		return false;
+	}
+
+	for (;; text++)
+	{
+		int value = hex_value((unsigned char)*text);
+		if (value >= 0)
+		{
+			if (token_length >= (int)sizeof(token))
+			{
+				free(parsed);
+				return false;
+			}
+
+			token[token_length++] = *text;
+			continue;
+		}
+
+		if (*text == ',' || *text == ';' || *text == '\0'
+			|| *text == ' ' || *text == '\t' || *text == '\r' || *text == '\n')
+		{
+			if (token_length > 0)
+			{
+				if (token_length != (int)sizeof(token) || count >= 94)
+				{
+					free(parsed);
+					return false;
+				}
+
+				for (int byte_index = 0; byte_index < GIF320_CELL_PATTERN_BYTES; byte_index++)
+				{
+					int high = hex_value(token[byte_index * 2]);
+					int low = hex_value(token[byte_index * 2 + 1]);
+					parsed[count * GIF320_CELL_PATTERN_BYTES + byte_index] =
+						(unsigned char)((high << 4) | low);
+				}
+
+				count++;
+				token_length = 0;
+			}
+
+			if (*text == '\0')
+			{
+				break;
+			}
+
+			continue;
+		}
+
+		free(parsed);
+		return false;
+	}
+
+	*patterns = parsed;
+	*pattern_count = count;
+	return true;
+}
+
+static bool parse_manual_cell_map(
+	const char *text,
+	int cells_x,
+	int cells_y,
+	unsigned char **cell_map
+)
+{
+	static const char prefix[] = "gif320-map-v1:";
+	size_t prefix_length = sizeof(prefix) - 1;
+	int parsed_cells_x;
+	int parsed_cells_y;
+	int cell_count = cells_x * cells_y;
+	unsigned char *parsed;
+	char *end;
+
+	*cell_map = NULL;
+	if (text == NULL || text[0] == '\0')
+	{
+		return true;
+	}
+
+	if (!starts_with_ignore_case(text, prefix))
+	{
+		return false;
+	}
+
+	text += prefix_length;
+	parsed_cells_x = (int)strtol(text, &end, 10);
+	if (end == text || *end != 'x')
+	{
+		return false;
+	}
+
+	text = end + 1;
+	parsed_cells_y = (int)strtol(text, &end, 10);
+	if (end == text || *end != ':')
+	{
+		return false;
+	}
+
+	if (parsed_cells_x != cells_x || parsed_cells_y != cells_y)
+	{
+		return true;
+	}
+
+	text = end + 1;
+	if (strlen(text) != (size_t)cell_count * 2)
+	{
+		return false;
+	}
+
+	parsed = (unsigned char *)malloc((size_t)cell_count);
+	if (parsed == NULL)
+	{
+		return false;
+	}
+
+	for (int i = 0; i < cell_count; i++)
+	{
+		int high = hex_value((unsigned char)text[i * 2]);
+		int low = hex_value((unsigned char)text[i * 2 + 1]);
+		if (high < 0 || low < 0)
+		{
+			free(parsed);
+			return false;
+		}
+
+		parsed[i] = (unsigned char)((high << 4) | low);
+	}
+
+	if (text[cell_count * 2] != '\0')
+	{
+		free(parsed);
+		return false;
+	}
+
+	*cell_map = parsed;
+	return true;
+}
+
 static void write_cell_pattern(
 	unsigned char *bits,
 	int terminal_width,
@@ -467,6 +676,70 @@ static void write_cell_pattern(
 			bool on = (pattern[bit / 8] & (1U << (bit % 8))) != 0;
 			bits[target] = (unsigned char)((inverted ? !on : on) ? 1 : 0);
 		}
+	}
+}
+
+static void render_manual_cell_map(
+	unsigned char *target_bits,
+	int cells_x,
+	int cells_y,
+	int terminal_width,
+	const unsigned char *manual_patterns,
+	int manual_pattern_count,
+	const unsigned char *cell_map
+)
+{
+	unsigned char blank[GIF320_CELL_PATTERN_BYTES];
+	memset(blank, 0, sizeof(blank));
+	memset(
+		target_bits,
+		0,
+		(size_t)cells_x
+			* GIF320_CELL_PIXEL_WIDTH
+			* cells_y
+			* GIF320_CELL_PIXEL_HEIGHT
+	);
+
+	for (int cell = 0; cell < cells_x * cells_y; cell++)
+	{
+		int cell_x = cell % cells_x;
+		int cell_y = cell / cells_x;
+		unsigned char mapped = cell_map[cell];
+		int glyph_code = mapped & 0x7f;
+		bool inverted = (mapped & 0x80) != 0;
+		const unsigned char *pattern;
+
+		if (glyph_code == 0)
+		{
+			if (inverted)
+			{
+				write_cell_pattern(
+					target_bits,
+					terminal_width,
+					cell_x,
+					cell_y,
+					blank,
+					true
+				);
+			}
+
+			continue;
+		}
+
+		if (glyph_code > manual_pattern_count)
+		{
+			continue;
+		}
+
+		pattern = manual_patterns + (glyph_code - 1) * GIF320_CELL_PATTERN_BYTES;
+		write_cell_pattern(
+			target_bits,
+			terminal_width,
+			cell_x,
+			cell_y,
+			pattern,
+			inverted
+		);
 	}
 }
 
@@ -643,6 +916,107 @@ static void assign_pattern_to_prototypes(
 	}
 }
 
+static void map_manual_patterns_to_prototypes(
+	const unsigned char *prototypes,
+	int prototype_count,
+	const unsigned char *manual_patterns,
+	int manual_pattern_count,
+	unsigned char *mapped_patterns
+)
+{
+	bool *prototype_mapped = (bool *)calloc((size_t)prototype_count, sizeof(bool));
+	bool *manual_used = (bool *)calloc((size_t)manual_pattern_count, sizeof(bool));
+
+	if (prototype_mapped == NULL || manual_used == NULL)
+	{
+		memcpy(
+			mapped_patterns,
+			prototypes,
+			(size_t)prototype_count * GIF320_CELL_PATTERN_BYTES
+		);
+		free(prototype_mapped);
+		free(manual_used);
+		return;
+	}
+
+	for (int prototype_index = 0; prototype_index < prototype_count; prototype_index++)
+	{
+		const unsigned char *prototype = prototypes
+			+ prototype_index * GIF320_CELL_PATTERN_BYTES;
+		for (int manual_index = 0; manual_index < manual_pattern_count; manual_index++)
+		{
+			const unsigned char *manual = manual_patterns
+				+ manual_index * GIF320_CELL_PATTERN_BYTES;
+			if (manual_used[manual_index]
+				|| memcmp(prototype, manual, GIF320_CELL_PATTERN_BYTES) != 0)
+			{
+				continue;
+			}
+
+			memcpy(
+				mapped_patterns + prototype_index * GIF320_CELL_PATTERN_BYTES,
+				manual,
+				GIF320_CELL_PATTERN_BYTES
+			);
+			prototype_mapped[prototype_index] = true;
+			manual_used[manual_index] = true;
+			break;
+		}
+	}
+
+	for (int prototype_index = 0; prototype_index < prototype_count; prototype_index++)
+	{
+		const unsigned char *prototype = prototypes
+			+ prototype_index * GIF320_CELL_PATTERN_BYTES;
+		int best_manual_index = -1;
+		int best_distance = GIF320_CELL_PATTERN_BITS + 1;
+
+		if (prototype_mapped[prototype_index])
+		{
+			continue;
+		}
+
+		for (int manual_index = 0; manual_index < manual_pattern_count; manual_index++)
+		{
+			const unsigned char *manual = manual_patterns
+				+ manual_index * GIF320_CELL_PATTERN_BYTES;
+			int distance;
+			if (manual_used[manual_index])
+			{
+				continue;
+			}
+
+			distance = pattern_distance(prototype, manual, false);
+			if (distance < best_distance)
+			{
+				best_distance = distance;
+				best_manual_index = manual_index;
+			}
+		}
+
+		if (best_manual_index >= 0)
+		{
+			memcpy(
+				mapped_patterns + prototype_index * GIF320_CELL_PATTERN_BYTES,
+				manual_patterns + best_manual_index * GIF320_CELL_PATTERN_BYTES,
+				GIF320_CELL_PATTERN_BYTES
+			);
+			manual_used[best_manual_index] = true;
+		}
+		else
+		{
+			memcpy(
+				mapped_patterns + prototype_index * GIF320_CELL_PATTERN_BYTES,
+				prototype,
+				GIF320_CELL_PATTERN_BYTES
+			);
+		}
+	}
+
+	free(prototype_mapped);
+	free(manual_used);
+}
+
 static bool reduce_cells_to_glyph_budget(
 	const Gif320Vt320Options *options,
 	const unsigned char *source_bits,
@@ -664,8 +1038,13 @@ static bool reduce_cells_to_glyph_budget(
 		(size_t)max_glyphs,
 		GIF320_CELL_PATTERN_BYTES
 	);
+	unsigned char *manual_patterns = NULL;
+	unsigned char *manual_cell_map = NULL;
+	int manual_pattern_count = 0;
 	int prototype_count = 0;
 	int unique_count = 0;
+	unsigned char *mapped_manual_patterns = NULL;
+	const unsigned char *output_patterns;
 	unsigned char pattern[GIF320_CELL_PATTERN_BYTES];
 
 	if (unique_patterns == NULL
@@ -686,6 +1065,56 @@ static bool reduce_cells_to_glyph_budget(
 		free(cell_unique);
 		free(prototypes);
 		return false;
+	}
+
+	if (!parse_manual_atlas(
+		options->manual_atlas,
+		&manual_patterns,
+		&manual_pattern_count
+	))
+	{
+		manual_pattern_count = 0;
+	}
+
+	if (!parse_manual_cell_map(
+		options->manual_cell_map,
+		cells_x,
+		cells_y,
+		&manual_cell_map
+	))
+	{
+		free(manual_patterns);
+		manual_patterns = NULL;
+		manual_pattern_count = 0;
+	}
+
+	if (manual_patterns != NULL
+		&& manual_pattern_count > 0
+		&& manual_cell_map != NULL)
+	{
+		render_manual_cell_map(
+			target_bits,
+			cells_x,
+			cells_y,
+			terminal_width,
+			manual_patterns,
+			manual_pattern_count,
+			manual_cell_map
+		);
+		free(unique_patterns);
+		free(unique_weights);
+		free(cell_unique);
+		free(prototypes);
+		free(manual_patterns);
+		free(manual_cell_map);
+		return true;
+	}
+
+	if (manual_patterns != NULL)
+	{
+		free(manual_patterns);
+		manual_patterns = NULL;
+		manual_pattern_count = 0;
 	}
 
 	memset(
@@ -748,6 +1177,26 @@ static bool reduce_cells_to_glyph_budget(
 		&prototype_count
 	);
 
+	output_patterns = prototypes;
+	if (manual_pattern_count > 0 && prototype_count > 0)
+	{
+		mapped_manual_patterns = (unsigned char *)calloc(
+			(size_t)prototype_count,
+			GIF320_CELL_PATTERN_BYTES
+		);
+		if (mapped_manual_patterns != NULL)
+		{
+			map_manual_patterns_to_prototypes(
+				prototypes,
+				prototype_count,
+				manual_patterns,
+				manual_pattern_count,
+				mapped_manual_patterns
+			);
+			output_patterns = mapped_manual_patterns;
+		}
+	}
+
 	for (int cell = 0; cell < cell_count; cell++)
 	{
 		int cell_x = cell % cells_x;
@@ -755,6 +1204,7 @@ static bool reduce_cells_to_glyph_budget(
 		int unique_index = cell_unique[cell];
 		int chosen = -1;
 		bool inverted = false;
+		const unsigned char *output_pattern;
 
 		if (unique_index < 0)
 		{
@@ -773,12 +1223,13 @@ static bool reduce_cells_to_glyph_budget(
 			continue;
 		}
 
+		output_pattern = output_patterns + chosen * GIF320_CELL_PATTERN_BYTES;
 		write_cell_pattern(
 			target_bits,
 			terminal_width,
 			cell_x,
 			cell_y,
-			prototypes + chosen * GIF320_CELL_PATTERN_BYTES,
+			output_pattern,
 			inverted
 		);
 	}
@@ -787,6 +1238,9 @@ static bool reduce_cells_to_glyph_budget(
 	free(unique_weights);
 	free(cell_unique);
 	free(prototypes);
+	free(mapped_manual_patterns);
+	free(manual_patterns);
+	free(manual_cell_map);
 	return true;
 }
 
@@ -981,8 +1435,15 @@ void gif320_vt320_options_init(Gif320Vt320Options *options)
 	options->blue_balance = 10.0;
 	options->full_threshold = 0.50;
 	options->half_threshold = 0.25;
+	options->lock_red_balance = false;
+	options->lock_green_balance = false;
+	options->lock_blue_balance = false;
+	options->lock_full_threshold = false;
+	options->lock_half_threshold = false;
 	options->auto_tune = true;
 	options->reverse_video_tolerance = 4;
+	options->manual_atlas = "";
+	options->manual_cell_map = "";
 	options->tint_red = 1.0;
 	options->tint_green = 191.0 / 255.0;
 	options->tint_blue = 0.0;

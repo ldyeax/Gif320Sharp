@@ -37,3 +37,15 @@ shared_module(
   install_dir: get_option('libdir') / 'gegl-0.4',
 )
 endforeach
+
+manual_atlas_regression = executable(
+  'manual-atlas-regression',
+  [
+    'test/manual_atlas_regression.c',
+    'src/gif320_vt320_core.c',
+  ],
+  include_directories: include_directories('src'),
+  dependencies: [math_dep],
+)
+
+test('manual atlas regression', manual_atlas_regression)

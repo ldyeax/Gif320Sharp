@@ -40,6 +40,11 @@ property_double (full_threshold, "Full threshold", 0.50)
   value_range (0.0, 1.0)
 property_double (half_threshold, "Half threshold", 0.25)
   value_range (0.0, 1.0)
+property_boolean (lock_red_balance, "Lock red balance", FALSE)
+property_boolean (lock_green_balance, "Lock green balance", FALSE)
+property_boolean (lock_blue_balance, "Lock blue balance", FALSE)
+property_boolean (lock_full_threshold, "Lock full threshold", FALSE)
+property_boolean (lock_half_threshold, "Lock half threshold", FALSE)
 property_int (tune_frequency, "Tune frequency", 0)
   value_range (-100, 100)
 property_int (tune_smoothness, "Tune smoothness", 0)
@@ -48,6 +53,8 @@ property_int (tune_glyph_reuse, "Tune glyph reuse", 0)
   value_range (-100, 100)
 property_int (reverse_video_tolerance, "Reverse video tolerance", 4)
   value_range (0, 180)
+property_string (manual_atlas, "Manual atlas", "")
+property_string (manual_cell_map, "Manual cell map", "")
 property_double (tint_red, "Tint red", 1.0)
   value_range (0.0, 1.0)
 property_double (tint_green, "Tint green", 0.7490196078431373)
@@ -147,6 +154,8 @@ log_elapsed (
 static void
 clear_preview_cache (void)
 {
+	g_free ((gchar *)preview_cache.options.manual_atlas);
+	g_free ((gchar *)preview_cache.options.manual_cell_map);
 	g_free (preview_cache.pixels);
 	memset (&preview_cache, 0, sizeof (preview_cache));
 }
@@ -175,7 +184,40 @@ same_options (
 	const Gif320Vt320Options *right
 )
 {
-	return memcmp (left, right, sizeof (*left)) == 0;
+	return left->size_mode == right->size_mode
+		&& left->cells_x == right->cells_x
+		&& left->cells_y == right->cells_y
+		&& left->output_scale == right->output_scale
+		&& left->resize_mode == right->resize_mode
+		&& left->dither_mode == right->dither_mode
+		&& left->allow_glyph_reduction == right->allow_glyph_reduction
+		&& left->max_glyphs == right->max_glyphs
+		&& left->red_balance == right->red_balance
+		&& left->green_balance == right->green_balance
+		&& left->blue_balance == right->blue_balance
+		&& left->full_threshold == right->full_threshold
+		&& left->half_threshold == right->half_threshold
+		&& left->lock_red_balance == right->lock_red_balance
+		&& left->lock_green_balance == right->lock_green_balance
+		&& left->lock_blue_balance == right->lock_blue_balance
+		&& left->lock_full_threshold == right->lock_full_threshold
+		&& left->lock_half_threshold == right->lock_half_threshold
+		&& left->auto_tune == right->auto_tune
+		&& left->tune_frequency == right->tune_frequency
+		&& left->tune_smoothness == right->tune_smoothness
+		&& left->tune_glyph_reuse == right->tune_glyph_reuse
+		&& left->reverse_video_tolerance == right->reverse_video_tolerance
+		&& g_strcmp0 (left->manual_atlas, right->manual_atlas) == 0
+		&& g_strcmp0 (left->manual_cell_map, right->manual_cell_map) == 0
+		&& left->tint_red == right->tint_red
+		&& left->tint_green == right->tint_green
+		&& left->tint_blue == right->tint_blue
+		&& left->second_pass == right->second_pass
+		&& left->scanline_gap == right->scanline_gap
+		&& left->pixel_roundness == right->pixel_roundness
+		&& left->roundness_aspect == right->roundness_aspect
+		&& left->hide_single_pixel == right->hide_single_pixel
+		&& left->glow == right->glow;
 }
 
 static guint64
@@ -362,11 +404,18 @@ fill_options (GeglProperties *o, Gif320Vt320Options *options)
 	options->blue_balance = o->blue_balance;
 	options->full_threshold = o->full_threshold;
 	options->half_threshold = o->half_threshold;
+	options->lock_red_balance = o->lock_red_balance;
+	options->lock_green_balance = o->lock_green_balance;
+	options->lock_blue_balance = o->lock_blue_balance;
+	options->lock_full_threshold = o->lock_full_threshold;
+	options->lock_half_threshold = o->lock_half_threshold;
 	options->auto_tune = o->auto_tune;
 	options->tune_frequency = o->tune_frequency;
 	options->tune_smoothness = o->tune_smoothness;
 	options->tune_glyph_reuse = o->tune_glyph_reuse;
 	options->reverse_video_tolerance = o->reverse_video_tolerance;
+	options->manual_atlas = o->manual_atlas != NULL ? o->manual_atlas : "";
+	options->manual_cell_map = o->manual_cell_map != NULL ? o->manual_cell_map : "";
 	options->tint_red = o->tint_red;
 	options->tint_green = o->tint_green;
 	options->tint_blue = o->tint_blue;
@@ -511,7 +560,6 @@ ensure_preview_cache (
 	memset (&next, 0, sizeof (next));
 	next.operation = operation;
 	next.source_buffer = source_buffer;
-	next.options = *options;
 	next.source = *source;
 	next.source_hash = source_hash;
 	next.output_rect = *output_rect;
@@ -571,6 +619,20 @@ ensure_preview_cache (
 		display_rect.height
 	);
 	g_free (visual_pixels);
+	next.options = *options;
+	next.options.manual_atlas = g_strdup (options->manual_atlas != NULL
+		? options->manual_atlas
+		: "");
+	next.options.manual_cell_map = g_strdup (options->manual_cell_map != NULL
+		? options->manual_cell_map
+		: "");
+	if (next.options.manual_atlas == NULL || next.options.manual_cell_map == NULL)
+	{
+		g_free ((gchar *)next.options.manual_atlas);
+		g_free ((gchar *)next.options.manual_cell_map);
+		g_free (next.pixels);
+		return FALSE;
+	}
 
 	clear_preview_cache ();
 	preview_cache = next;

@@ -39,7 +39,13 @@ namespace Gif320Sharp_Core
 
 		public int AutoTuneGlyphReusePreference { get; set; }
 
+		public Gif320AutoTuneLocks AutoTuneLocks { get; set; }
+
 		public int ReverseVideoInversionTolerance { get; set; } = 4;
+
+		public string ManualAtlas { get; set; } = string.Empty;
+
+		public string ManualCellMap { get; set; } = string.Empty;
 
 		public bool IncludeTerminalSetup { get; set; } = true;
 
@@ -82,7 +88,10 @@ namespace Gif320Sharp_Core
 				AutoTuneFrequencyPreference = AutoTuneFrequencyPreference,
 				AutoTuneSmoothnessPreference = AutoTuneSmoothnessPreference,
 				AutoTuneGlyphReusePreference = AutoTuneGlyphReusePreference,
+				AutoTuneLocks = AutoTuneLocks,
 				ReverseVideoInversionTolerance = ReverseVideoInversionTolerance,
+				ManualAtlas = ManualAtlas,
+				ManualCellMap = ManualCellMap,
 				IncludeTerminalSetup = IncludeTerminalSetup,
 				IncludeTerminalReset = IncludeTerminalReset,
 				CenterOnScreen = CenterOnScreen,
@@ -150,6 +159,11 @@ namespace Gif320Sharp_Core
 			if (AutoTuneGlyphReusePreference < -100 || AutoTuneGlyphReusePreference > 100)
 			{
 				throw new ArgumentOutOfRangeException(nameof(AutoTuneGlyphReusePreference));
+			}
+
+			if ((AutoTuneLocks & ~Gif320AutoTuneLocks.Tone) != 0)
+			{
+				throw new ArgumentOutOfRangeException(nameof(AutoTuneLocks));
 			}
 
 			if (ReverseVideoInversionTolerance < 0

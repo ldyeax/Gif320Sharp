@@ -58,11 +58,18 @@ typedef struct Gif320Vt320Options
 	double blue_balance;
 	double full_threshold;
 	double half_threshold;
+	bool lock_red_balance;
+	bool lock_green_balance;
+	bool lock_blue_balance;
+	bool lock_full_threshold;
+	bool lock_half_threshold;
 	bool auto_tune;
 	int tune_frequency;
 	int tune_smoothness;
 	int tune_glyph_reuse;
 	int reverse_video_tolerance;
+	const char *manual_atlas;
+	const char *manual_cell_map;
 
 	double tint_red;
 	double tint_green;

@@ -85,6 +85,8 @@ namespace Gif320Sharp_Core
 				_lastCellsX,
 				_lastCellsY,
 				_currentGlyph,
+				string.Empty,
+				string.Empty,
 				0.0,
 				0.0,
 				0.0,

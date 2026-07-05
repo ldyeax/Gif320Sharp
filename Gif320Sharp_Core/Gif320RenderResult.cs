@@ -13,6 +13,8 @@ namespace Gif320Sharp_Core
 			int cellsX,
 			int cellsY,
 			int uniqueGlyphCountBeforeReduction,
+			string glyphAtlas,
+			string cellMap,
 			double score,
 			double reductionErrorPerCellPixel,
 			double highReductionErrorPerCellPixel,
@@ -27,6 +29,8 @@ namespace Gif320Sharp_Core
 			CellsX = cellsX;
 			CellsY = cellsY;
 			UniqueGlyphCountBeforeReduction = uniqueGlyphCountBeforeReduction;
+			GlyphAtlas = glyphAtlas;
+			CellMap = cellMap;
 			Score = score;
 			ReductionErrorPerCellPixel = reductionErrorPerCellPixel;
 			HighReductionErrorPerCellPixel = highReductionErrorPerCellPixel;
@@ -52,6 +56,10 @@ namespace Gif320Sharp_Core
 		public int UniqueGlyphCountBeforeReduction { get; }
 
 		public bool WasGlyphReduced => UniqueGlyphCountBeforeReduction > GlyphCount;
+
+		public string GlyphAtlas { get; }
+
+		public string CellMap { get; }
 
 		public double Score { get; }
 

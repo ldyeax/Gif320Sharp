@@ -11,6 +11,9 @@ namespace Gif320Sharp_Core
 	{
 		private const int BitsPerGlyph = Gif320RenderOptions.CellPixelWidth
 			* Gif320RenderOptions.CellPixelHeight;
+		private const int BytesPerGlyph = (BitsPerGlyph + 7) / 8;
+		private const string AtlasPrefix = "gif320-atlas-v1:";
+		private const string CellMapPrefix = "gif320-map-v1:";
 		private const int MaxAutoTuneSearchPixels = 60000;
 		private const int MaxWorstCellRefinementIterations = 8;
 		private const int MaxWorstCellRefinementCandidates = 18;
@@ -231,6 +234,8 @@ namespace Gif320Sharp_Core
 				reduceGlyphs: false,
 				cancellationToken
 			);
+			ApplyManualAtlas(packed, options.ManualAtlas);
+			ApplyManualCellMap(packed, options.ManualAtlas, options.ManualCellMap, options.CellsX, options.CellsY);
 			bool[] reconstructed = ReconstructBitmap(
 				packed,
 				options.CellsX,
@@ -268,6 +273,8 @@ namespace Gif320Sharp_Core
 				reduceGlyphs,
 				cancellationToken
 			);
+			ApplyManualAtlas(packed, options.ManualAtlas);
+			ApplyManualCellMap(packed, options.ManualAtlas, options.ManualCellMap, options.CellsX, options.CellsY);
 			bool[] reconstructed = ReconstructBitmap(
 				packed,
 				options.CellsX,
@@ -287,6 +294,8 @@ namespace Gif320Sharp_Core
 
 			string[] rows = BuildScreenRows(packed, options.CellsX, options.CellsY);
 			string sequence = BuildVtSequence(packed, rows, options);
+			string glyphAtlas = BuildGlyphAtlas(packed.Glyphs);
+			string cellMap = BuildCellMap(packed, options.CellsX, options.CellsY);
 			return new Gif320RenderResult(
 				sequence,
 				rows,
@@ -296,6 +305,8 @@ namespace Gif320Sharp_Core
 				options.CellsX,
 				options.CellsY,
 				packed.UniqueGlyphCount,
+				glyphAtlas,
+				cellMap,
 				score,
 				packed.ReductionErrorPerCellPixel,
 				packed.HighReductionErrorPerCellPixel,
@@ -340,7 +351,8 @@ namespace Gif320Sharp_Core
 								gamma,
 								contrast,
 								brightness,
-								useLocalContrast: false
+								useLocalContrast: false,
+								options
 							))
 							{
 								if (emitted.Add(GetSettingsKey(settings)))
@@ -358,7 +370,8 @@ namespace Gif320Sharp_Core
 					gamma: 1.0,
 					contrast: 1.0,
 					brightness: 0.0,
-					useLocalContrast: true
+					useLocalContrast: true,
+					options
 				))
 				{
 					if (emitted.Add(GetSettingsKey(settings)))
@@ -375,7 +388,8 @@ namespace Gif320Sharp_Core
 			double gamma,
 			double contrast,
 			double brightness,
-			bool useLocalContrast
+			bool useLocalContrast,
+			Gif320RenderOptions options
 		)
 		{
 			var baseSettings = new Gif320ToneSettings
@@ -398,31 +412,36 @@ namespace Gif320Sharp_Core
 				baseSettings,
 				Gif320DitherMode.FloydSteinberg,
 				otsu,
-				otsu * 0.5
+				otsu * 0.5,
+				options
 			);
 			yield return WithDither(
 				baseSettings,
 				Gif320DitherMode.FloydSteinberg,
 				balanced,
-				balanced * 0.5
+				balanced * 0.5,
+				options
 			);
 			yield return WithDither(
 				baseSettings,
 				Gif320DitherMode.Checkerboard,
 				otsu,
-				Math.Max(0.0, otsu * 0.55)
+				Math.Max(0.0, otsu * 0.55),
+				options
 			);
 			yield return WithDither(
 				baseSettings,
 				Gif320DitherMode.Checkerboard,
 				0.5,
-				0.25
+				0.25,
+				options
 			);
 			yield return WithDither(
 				baseSettings,
 				Gif320DitherMode.Threshold,
 				otsu,
-				otsu
+				otsu,
+				options
 			);
 		}
 
@@ -430,14 +449,121 @@ namespace Gif320Sharp_Core
 			Gif320ToneSettings baseSettings,
 			Gif320DitherMode ditherMode,
 			double threshold,
-			double halfThreshold
+			double halfThreshold,
+			Gif320RenderOptions options
 		)
 		{
 			Gif320ToneSettings settings = baseSettings.Clone();
 			settings.DitherMode = ditherMode;
 			settings.Threshold = Clamp01(threshold);
 			settings.HalfThreshold = Math.Min(settings.Threshold, Clamp01(halfThreshold));
+			ApplyAutoTuneLocks(settings, options);
 			return settings;
+		}
+
+		private static void ApplyAutoTuneLocks(
+			Gif320ToneSettings settings,
+			Gif320RenderOptions options
+		)
+		{
+			if ((options.AutoTuneLocks & Gif320AutoTuneLocks.Balance) != 0)
+			{
+				double[] candidate = NormalizeBalance(
+					settings.RedWeight,
+					settings.GreenWeight,
+					settings.BlueWeight
+				);
+				double[] locked = NormalizeBalance(
+					options.ToneSettings.RedWeight,
+					options.ToneSettings.GreenWeight,
+					options.ToneSettings.BlueWeight
+				);
+				double[] balance = ApplyLockedBalance(candidate, locked, options.AutoTuneLocks);
+				settings.RedWeight = balance[0];
+				settings.GreenWeight = balance[1];
+				settings.BlueWeight = balance[2];
+			}
+
+			bool lockFullThreshold =
+				(options.AutoTuneLocks & Gif320AutoTuneLocks.FullThreshold) != 0;
+			bool lockHalfThreshold =
+				(options.AutoTuneLocks & Gif320AutoTuneLocks.HalfThreshold) != 0;
+			if (!lockFullThreshold && !lockHalfThreshold)
+			{
+				return;
+			}
+
+			if (lockFullThreshold)
+			{
+				settings.Threshold = Clamp01(options.ToneSettings.Threshold);
+			}
+
+			if (lockHalfThreshold)
+			{
+				settings.HalfThreshold = Clamp01(options.ToneSettings.HalfThreshold);
+			}
+
+			if (settings.HalfThreshold > settings.Threshold)
+			{
+				if (lockHalfThreshold && !lockFullThreshold)
+				{
+					settings.Threshold = settings.HalfThreshold;
+				}
+				else
+				{
+					settings.HalfThreshold = settings.Threshold;
+				}
+			}
+		}
+
+		private static double[] ApplyLockedBalance(
+			double[] candidate,
+			double[] locked,
+			Gif320AutoTuneLocks locks
+		)
+		{
+			bool lockRed = (locks & Gif320AutoTuneLocks.RedBalance) != 0;
+			bool lockGreen = (locks & Gif320AutoTuneLocks.GreenBalance) != 0;
+			bool lockBlue = (locks & Gif320AutoTuneLocks.BlueBalance) != 0;
+			var result = new double[3];
+			bool[] lockedChannels = { lockRed, lockGreen, lockBlue };
+			double lockedSum = 0.0;
+			double freeCandidateSum = 0.0;
+			int freeCount = 0;
+
+			for (int i = 0; i < result.Length; i++)
+			{
+				if (lockedChannels[i])
+				{
+					result[i] = locked[i];
+					lockedSum += locked[i];
+				}
+				else
+				{
+					freeCandidateSum += candidate[i];
+					freeCount++;
+				}
+			}
+
+			if (freeCount == 0)
+			{
+				return result;
+			}
+
+			double remaining = Math.Max(0.0, 1.0 - lockedSum);
+			for (int i = 0; i < result.Length; i++)
+			{
+				if (lockedChannels[i])
+				{
+					continue;
+				}
+
+				result[i] = freeCandidateSum > 0.0
+					? candidate[i] * remaining / freeCandidateSum
+					: remaining / freeCount;
+			}
+
+			return result;
 		}
 
 		private static RenderedBitmap RenderBitmap(
@@ -1912,6 +2038,271 @@ namespace Gif320Sharp_Core
 			}
 
 			return patterns;
+		}
+
+		private static string BuildCellMap(PackedScreen packed, int cellsX, int cellsY)
+		{
+			var builder = new StringBuilder(CellMapPrefix);
+			builder.Append(cellsX.ToString(CultureInfo.InvariantCulture));
+			builder.Append('x');
+			builder.Append(cellsY.ToString(CultureInfo.InvariantCulture));
+			builder.Append(':');
+			for (int i = 0; i < packed.CellGlyphIndexes.Length; i++)
+			{
+				int glyphIndex = packed.CellGlyphIndexes[i];
+				int code = glyphIndex >= 0 ? glyphIndex + 1 : 0;
+				if (packed.CellReverseVideo[i])
+				{
+					code |= 0x80;
+				}
+
+				builder.Append(code.ToString("x2", CultureInfo.InvariantCulture));
+			}
+
+			return builder.ToString();
+		}
+
+		private static string BuildGlyphAtlas(IReadOnlyList<GlyphPattern> glyphs)
+		{
+			var builder = new StringBuilder(AtlasPrefix);
+			for (int glyphIndex = 0; glyphIndex < glyphs.Count; glyphIndex++)
+			{
+				if (glyphIndex > 0)
+				{
+					builder.Append(',');
+				}
+
+				AppendGlyphHex(builder, glyphs[glyphIndex].Pixels);
+			}
+
+			return builder.ToString();
+		}
+
+		private static void ApplyManualAtlas(PackedScreen packed, string? manualAtlas)
+		{
+			List<bool[]> overrides = ParseManualAtlas(manualAtlas);
+			int count = Math.Min(overrides.Count, packed.Glyphs.Count);
+			for (int i = 0; i < count; i++)
+			{
+				bool[] pixels = overrides[i];
+				packed.Glyphs[i] = new GlyphPattern(pixels, PackBits(pixels));
+			}
+		}
+
+		private static void ApplyManualCellMap(
+			PackedScreen packed,
+			string? manualAtlas,
+			string? manualCellMap,
+			int cellsX,
+			int cellsY
+		)
+		{
+			List<bool[]> overrides = ParseManualAtlas(manualAtlas);
+			byte[] map = ParseManualCellMap(manualCellMap, cellsX, cellsY);
+			if (overrides.Count == 0 || map.Length == 0)
+			{
+				return;
+			}
+
+			packed.Glyphs.Clear();
+			foreach (bool[] pixels in overrides)
+			{
+				packed.Glyphs.Add(new GlyphPattern(pixels, PackBits(pixels)));
+			}
+
+			for (int i = 0; i < map.Length && i < packed.CellGlyphIndexes.Length; i++)
+			{
+				int code = map[i] & 0x7f;
+				int glyphIndex = code == 0 ? -1 : code - 1;
+				packed.CellGlyphIndexes[i] = glyphIndex >= 0 && glyphIndex < packed.Glyphs.Count
+					? glyphIndex
+					: -1;
+				packed.CellReverseVideo[i] = (map[i] & 0x80) != 0;
+			}
+		}
+
+		private static List<bool[]> ParseManualAtlas(string? manualAtlas)
+		{
+			var glyphs = new List<bool[]>();
+			if (string.IsNullOrWhiteSpace(manualAtlas))
+			{
+				return glyphs;
+			}
+
+			string text = manualAtlas.Trim();
+			if (text.StartsWith(AtlasPrefix, StringComparison.OrdinalIgnoreCase))
+			{
+				text = text.Substring(AtlasPrefix.Length);
+			}
+
+			var token = new StringBuilder(BytesPerGlyph * 2);
+			foreach (char c in text)
+			{
+				if (IsHexDigit(c))
+				{
+					token.Append(c);
+				}
+				else if (c == ',' || c == ';' || char.IsWhiteSpace(c))
+				{
+					FlushAtlasToken(token, glyphs);
+				}
+				else
+				{
+					throw new ArgumentException(
+						"Manual atlas contains an unsupported character.",
+						nameof(manualAtlas)
+					);
+				}
+			}
+
+			FlushAtlasToken(token, glyphs);
+			return glyphs;
+		}
+
+		private static byte[] ParseManualCellMap(string? manualCellMap, int cellsX, int cellsY)
+		{
+			if (string.IsNullOrWhiteSpace(manualCellMap))
+			{
+				return Array.Empty<byte>();
+			}
+
+			string text = manualCellMap.Trim();
+			if (!text.StartsWith(CellMapPrefix, StringComparison.OrdinalIgnoreCase))
+			{
+				return Array.Empty<byte>();
+			}
+
+			int dimensionsStart = CellMapPrefix.Length;
+			int xIndex = text.IndexOf('x', dimensionsStart);
+			if (xIndex < 0)
+			{
+				return Array.Empty<byte>();
+			}
+
+			int separatorIndex = text.IndexOf(':', xIndex + 1);
+			if (separatorIndex < 0
+				|| !int.TryParse(
+					text.AsSpan(dimensionsStart, xIndex - dimensionsStart),
+					NumberStyles.None,
+					CultureInfo.InvariantCulture,
+					out int parsedCellsX
+				)
+				|| !int.TryParse(
+					text.AsSpan(xIndex + 1, separatorIndex - xIndex - 1),
+					NumberStyles.None,
+					CultureInfo.InvariantCulture,
+					out int parsedCellsY
+				)
+				|| parsedCellsX != cellsX
+				|| parsedCellsY != cellsY)
+			{
+				return Array.Empty<byte>();
+			}
+
+			string hex = text.Substring(separatorIndex + 1);
+			int cellCount = checked(cellsX * cellsY);
+			if (hex.Length != cellCount * 2)
+			{
+				return Array.Empty<byte>();
+			}
+
+			var map = new byte[cellCount];
+			for (int i = 0; i < map.Length; i++)
+			{
+				char high = hex[i * 2];
+				char low = hex[i * 2 + 1];
+				if (!IsHexDigit(high) || !IsHexDigit(low))
+				{
+					return Array.Empty<byte>();
+				}
+
+				map[i] = (byte)((HexValue(high) << 4) | HexValue(low));
+			}
+
+			return map;
+		}
+
+		private static void FlushAtlasToken(StringBuilder token, List<bool[]> glyphs)
+		{
+			if (token.Length == 0)
+			{
+				return;
+			}
+
+			if (token.Length != BytesPerGlyph * 2)
+			{
+				throw new ArgumentException(
+					$"Manual atlas glyphs must be {BytesPerGlyph * 2} hexadecimal characters."
+				);
+			}
+
+			if (glyphs.Count >= 94)
+			{
+				throw new ArgumentException("Manual atlas cannot contain more than 94 glyphs.");
+			}
+
+			var pixels = new bool[BitsPerGlyph];
+			for (int byteIndex = 0; byteIndex < BytesPerGlyph; byteIndex++)
+			{
+				byte value = (byte)((HexValue(token[byteIndex * 2]) << 4)
+					| HexValue(token[byteIndex * 2 + 1]));
+				for (int bit = 0; bit < 8; bit++)
+				{
+					int pixel = byteIndex * 8 + bit;
+					if (pixel < pixels.Length)
+					{
+						pixels[pixel] = (value & (1 << bit)) != 0;
+					}
+				}
+			}
+
+			glyphs.Add(pixels);
+			token.Clear();
+		}
+
+		private static void AppendGlyphHex(StringBuilder builder, bool[] pixels)
+		{
+			for (int byteIndex = 0; byteIndex < BytesPerGlyph; byteIndex++)
+			{
+				int value = 0;
+				for (int bit = 0; bit < 8; bit++)
+				{
+					int pixel = byteIndex * 8 + bit;
+					if (pixel < pixels.Length && pixels[pixel])
+					{
+						value |= 1 << bit;
+					}
+				}
+
+				builder.Append(value.ToString("x2", CultureInfo.InvariantCulture));
+			}
+		}
+
+		private static bool IsHexDigit(char value)
+		{
+			return (value >= '0' && value <= '9')
+				|| (value >= 'a' && value <= 'f')
+				|| (value >= 'A' && value <= 'F');
+		}
+
+		private static int HexValue(char value)
+		{
+			if (value >= '0' && value <= '9')
+			{
+				return value - '0';
+			}
+
+			if (value >= 'a' && value <= 'f')
+			{
+				return value - 'a' + 10;
+			}
+
+			if (value >= 'A' && value <= 'F')
+			{
+				return value - 'A' + 10;
+			}
+
+			throw new ArgumentException("Invalid hexadecimal digit.");
 		}
 
 		private static double ScoreImage(

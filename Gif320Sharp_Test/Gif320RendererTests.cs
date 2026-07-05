@@ -149,6 +149,77 @@ namespace Gif320Sharp_Test
 		}
 
 		[TestMethod]
+		public void ManualAtlasOverrideReplacesGlyphPixels()
+		{
+			byte[] image = CreateSingleStrokeCell();
+			var renderer = new Gif320Renderer();
+			var options = new Gif320RenderOptions
+			{
+				CellsX = 1,
+				CellsY = 1,
+				AutoTune = false,
+				ResizeMode = Gif320ResizeMode.Stretch,
+				ToneSettings = new Gif320ToneSettings
+				{
+					Threshold = 0.5,
+					DitherMode = Gif320DitherMode.Threshold,
+				},
+			};
+
+			Gif320RenderResult generated = renderer.RenderRgb(
+				image,
+				Gif320RenderOptions.CellPixelWidth,
+				Gif320RenderOptions.CellPixelHeight,
+				options
+			);
+			options.ManualAtlas = "gif320-atlas-v1:" + new string('0', 46);
+
+			Gif320RenderResult manual = renderer.RenderRgb(
+				image,
+				Gif320RenderOptions.CellPixelWidth,
+				Gif320RenderOptions.CellPixelHeight,
+				options
+			);
+
+			string blankSixel = new string('?', Gif320RenderOptions.CellPixelWidth)
+				+ "/"
+				+ new string('?', Gif320RenderOptions.CellPixelWidth);
+			Assert.AreEqual(1, generated.GlyphCount);
+			Assert.AreEqual(1, manual.GlyphCount);
+			Assert.AreEqual("!", manual.ScreenRows[0]);
+			Assert.AreNotEqual(generated.GlyphSixelPatterns[0], manual.GlyphSixelPatterns[0]);
+			Assert.AreEqual(blankSixel, manual.GlyphSixelPatterns[0]);
+			Assert.AreEqual(options.ManualAtlas, manual.GlyphAtlas);
+		}
+
+		[TestMethod]
+		public void ManualCellMapKeepsAtlasSlotsStable()
+		{
+			int width = Gif320RenderOptions.CellPixelWidth * 2;
+			int height = Gif320RenderOptions.CellPixelHeight;
+			byte[] image = CreateSolidImage(width, height, 0);
+			var renderer = new Gif320Renderer();
+			string blankGlyph = new string('0', 46);
+			string fullGlyph = new string('f', 44) + "0f";
+			var options = new Gif320RenderOptions
+			{
+				CellsX = 2,
+				CellsY = 1,
+				AutoTune = true,
+				MaxGlyphs = 2,
+				ResizeMode = Gif320ResizeMode.Stretch,
+				ManualAtlas = $"gif320-atlas-v1:{blankGlyph},{fullGlyph}",
+				ManualCellMap = "gif320-map-v1:2x1:0201",
+			};
+
+			Gif320RenderResult result = renderer.RenderRgb(image, width, height, options);
+
+			Assert.AreEqual("\"!", result.ScreenRows[0]);
+			Assert.AreEqual(options.ManualAtlas, result.GlyphAtlas);
+			Assert.AreEqual(options.ManualCellMap, result.CellMap);
+		}
+
+		[TestMethod]
 		public void AutomaticSettingsReturnScoredToneSettings()
 		{
 			byte[] image = CreateGradient(64, 64);
@@ -169,6 +240,39 @@ namespace Gif320Sharp_Test
 			Assert.IsTrue(result.ToneSettings.Threshold < 1.0);
 			Assert.IsTrue(result.GlyphCount <= 32);
 			Assert.IsFalse(string.IsNullOrEmpty(result.VtSequence));
+		}
+
+		[TestMethod]
+		public void AutoTuneLocksKeepConfiguredToneValues()
+		{
+			byte[] image = CreateGradient(64, 64);
+			var renderer = new Gif320Renderer();
+			var options = new Gif320RenderOptions
+			{
+				CellsX = 8,
+				CellsY = 4,
+				MaxGlyphs = 32,
+				AutoTune = true,
+				AutoTuneFinalists = 4,
+				AutoTuneLocks = Gif320AutoTuneLocks.Tone,
+				ToneSettings = new Gif320ToneSettings
+				{
+					RedWeight = 9.0,
+					GreenWeight = 3.0,
+					BlueWeight = 0.0,
+					Threshold = 0.62,
+					HalfThreshold = 0.31,
+					DitherMode = Gif320DitherMode.Checkerboard,
+				},
+			};
+
+			Gif320RenderResult result = renderer.RenderRgb(image, 64, 64, options);
+
+			Assert.AreEqual(0.75, result.ToneSettings.RedWeight, 0.000001);
+			Assert.AreEqual(0.25, result.ToneSettings.GreenWeight, 0.000001);
+			Assert.AreEqual(0.0, result.ToneSettings.BlueWeight, 0.000001);
+			Assert.AreEqual(0.62, result.ToneSettings.Threshold, 0.000001);
+			Assert.AreEqual(0.31, result.ToneSettings.HalfThreshold, 0.000001);
 		}
 
 		[TestMethod]
@@ -310,6 +414,19 @@ namespace Gif320Sharp_Test
 					SetPixel(pixels, width, x, y, leftOn ? (byte)255 : (byte)0);
 					SetPixel(pixels, width, x + cellWidth, y, rightOn ? (byte)255 : (byte)0);
 				}
+			}
+
+			return pixels;
+		}
+
+		private static byte[] CreateSingleStrokeCell()
+		{
+			int width = Gif320RenderOptions.CellPixelWidth;
+			int height = Gif320RenderOptions.CellPixelHeight;
+			var pixels = new byte[width * height * 3];
+			for (int y = 0; y < height; y++)
+			{
+				SetPixel(pixels, width, width / 2, y, 255);
 			}
 
 			return pixels;

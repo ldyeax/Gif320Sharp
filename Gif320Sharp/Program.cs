@@ -231,7 +231,15 @@ internal static class Program
 			{
 				if (!string.IsNullOrEmpty(cli.OutputPath))
 				{
-					WriteFile(converter, file, cli.OutputPath, cli.Conversion, cli.HexOutput);
+					WriteFile(
+						converter,
+						file,
+						cli.OutputPath,
+						cli.Conversion,
+						cli.HexOutput,
+						cli.AtlasOutput,
+						cli.AtlasStateOutput
+					);
 				}
 				else
 				{
@@ -2768,12 +2776,22 @@ internal static class Program
 		string inputPath,
 		string outputPath,
 		Gif320ConversionOptions options,
-		bool hexOutput
+		bool hexOutput,
+		bool atlasOutput,
+		bool atlasStateOutput
 	)
 	{
 		Gif320RenderResult result = converter.RenderGifFile(inputPath, options);
 		using Stream output = File.Create(outputPath);
-		if (hexOutput)
+		if (atlasStateOutput)
+		{
+			WriteAtlasState(output, result);
+		}
+		else if (atlasOutput)
+		{
+			WriteText(output, result.GlyphAtlas);
+		}
+		else if (hexOutput)
 		{
 			WriteSequenceHex(output, result.VtSequence);
 		}
@@ -2809,6 +2827,10 @@ internal static class Program
 				case "--no-auto":
 					cli.Conversion.AutoTune = false;
 					break;
+				case "--auto":
+				case "--auto-tune":
+					cli.Conversion.AutoTune = true;
+					break;
 				case "--no-reduce":
 					cli.Conversion.AllowGlyphReduction = false;
 					break;
@@ -2828,6 +2850,22 @@ internal static class Program
 				case "--hex":
 				case "--ascii-hex":
 					cli.HexOutput = true;
+					break;
+				case "--atlas":
+				case "--manual-atlas":
+					cli.Conversion.ManualAtlas = RequireValue(args, ref i, arg);
+					break;
+				case "--cell-map":
+				case "--manual-cell-map":
+					cli.Conversion.ManualCellMap = RequireValue(args, ref i, arg);
+					break;
+				case "--atlas-only":
+				case "--dump-atlas":
+					cli.AtlasOutput = true;
+					break;
+				case "--atlas-state-only":
+				case "--dump-atlas-state":
+					cli.AtlasStateOutput = true;
 					break;
 				case "--raw-rgba":
 					cli.RawPixelFormat = Gif320PixelFormat.Rgba32;
@@ -2897,6 +2935,35 @@ internal static class Program
 				case "--reuse-pref":
 					cli.Conversion.AutoTuneGlyphReusePreference = ParseInt(RequireValue(args, ref i, arg));
 					break;
+				case "--lock-red-balance":
+				case "--lock-red":
+					AddAutoTuneLock(cli.Conversion, Gif320AutoTuneLocks.RedBalance);
+					break;
+				case "--lock-green-balance":
+				case "--lock-green":
+					AddAutoTuneLock(cli.Conversion, Gif320AutoTuneLocks.GreenBalance);
+					break;
+				case "--lock-blue-balance":
+				case "--lock-blue":
+					AddAutoTuneLock(cli.Conversion, Gif320AutoTuneLocks.BlueBalance);
+					break;
+				case "--lock-balance":
+					AddAutoTuneLock(cli.Conversion, Gif320AutoTuneLocks.Balance);
+					break;
+				case "--lock-full-threshold":
+				case "--lock-full":
+					AddAutoTuneLock(cli.Conversion, Gif320AutoTuneLocks.FullThreshold);
+					break;
+				case "--lock-half-threshold":
+				case "--lock-half":
+					AddAutoTuneLock(cli.Conversion, Gif320AutoTuneLocks.HalfThreshold);
+					break;
+				case "--lock-thresholds":
+					AddAutoTuneLock(cli.Conversion, Gif320AutoTuneLocks.Thresholds);
+					break;
+				case "--lock-tone":
+					AddAutoTuneLock(cli.Conversion, Gif320AutoTuneLocks.Tone);
+					break;
 				case "--invert-tolerance":
 				case "--reverse-video-tolerance":
 					cli.Conversion.ReverseVideoInversionTolerance = ParseInt(
@@ -2928,6 +2995,14 @@ internal static class Program
 		}
 
 		return cli;
+	}
+
+	private static void AddAutoTuneLock(
+		Gif320ConversionOptions options,
+		Gif320AutoTuneLocks autoTuneLocks
+	)
+	{
+		options.AutoTuneLocks |= autoTuneLocks;
 	}
 
 	private static Gif320DitherMode ParseDitherMode(string value)
@@ -2979,6 +3054,19 @@ internal static class Program
 		output.Write(bytes, 0, bytes.Length);
 	}
 
+	private static void WriteText(Stream output, string text)
+	{
+		byte[] bytes = Encoding.ASCII.GetBytes(text);
+		output.Write(bytes, 0, bytes.Length);
+		output.WriteByte((byte)'\n');
+	}
+
+	private static void WriteAtlasState(Stream output, Gif320RenderResult result)
+	{
+		WriteText(output, result.GlyphAtlas);
+		WriteText(output, result.CellMap);
+	}
+
 	private static void WriteSequenceHex(Stream output, string sequence)
 	{
 		byte[] bytes = Encoding.ASCII.GetBytes(sequence);
@@ -3000,7 +3088,15 @@ internal static class Program
 		if (string.IsNullOrEmpty(cli.OutputPath))
 		{
 			Stream output = Console.OpenStandardOutput();
-			if (cli.HexOutput)
+			if (cli.AtlasStateOutput)
+			{
+				WriteAtlasState(output, result);
+			}
+			else if (cli.AtlasOutput)
+			{
+				WriteText(output, result.GlyphAtlas);
+			}
+			else if (cli.HexOutput)
 			{
 				WriteSequenceHex(output, result.VtSequence);
 			}
@@ -3013,7 +3109,15 @@ internal static class Program
 		}
 
 		using Stream file = File.Create(cli.OutputPath);
-		if (cli.HexOutput)
+		if (cli.AtlasStateOutput)
+		{
+			WriteAtlasState(file, result);
+		}
+		else if (cli.AtlasOutput)
+		{
+			WriteText(file, result.GlyphAtlas);
+		}
+		else if (cli.HexOutput)
 		{
 			WriteSequenceHex(file, result.VtSequence);
 		}
@@ -3030,7 +3134,9 @@ internal static class Program
 			&& !options.CellsX.HasValue
 			&& !options.CellsY.HasValue
 			&& options.OptimizeSize
-			&& options.AllowGlyphReduction;
+			&& options.AllowGlyphReduction
+			&& string.IsNullOrEmpty(options.ManualAtlas)
+			&& string.IsNullOrEmpty(options.ManualCellMap);
 	}
 
 	private static void Usage(TextWriter writer)
@@ -3042,6 +3148,10 @@ internal static class Program
 		writer.WriteLine("extra managed options:");
 		writer.WriteLine("  --output <file>       render non-interactively");
 		writer.WriteLine("  --hex                 output bytes as ASCII hex pairs");
+		writer.WriteLine("  --atlas <text>        override generated DRCS atlas glyphs");
+		writer.WriteLine("  --cell-map <text>     bind cells to manual atlas glyph slots");
+		writer.WriteLine("  --atlas-only          output the effective atlas text instead of VT bytes");
+		writer.WriteLine("  --atlas-state-only    output atlas and stable cell map text");
 		writer.WriteLine("  --raw-rgba <w> <h>    read raw RGBA pixels from stdin");
 		writer.WriteLine("  --raw-bgra <w> <h>    read raw BGRA pixels from stdin");
 		writer.WriteLine("  --full-screen         render 40x12 double-width/double-height");
@@ -3058,7 +3168,10 @@ internal static class Program
 		writer.WriteLine("  --tune-frequency <n>  prefer high frequency (>0) or low frequency (<0)");
 		writer.WriteLine("  --tune-smoothness <n> prefer smooth lines (>0) or inner detail (<0)");
 		writer.WriteLine("  --tune-glyph-reuse <n> prefer fewer glyphs (>0) or fidelity (<0)");
+		writer.WriteLine("  --lock-balance        keep configured RGB balance during auto tune");
+		writer.WriteLine("  --lock-thresholds     keep configured full/half thresholds during auto tune");
 		writer.WriteLine("  --invert-tolerance <n> reuse nearly inverted character chunks");
+		writer.WriteLine("  --auto-tune           enable automatic image tuning");
 		writer.WriteLine("  --no-auto             disable automatic image tuning");
 		writer.WriteLine("  --interactive-compat  use old deterministic interactive startup");
 		writer.WriteLine("  --no-reduce           fail instead of quantizing when cells exceed glyph budget");
@@ -3073,6 +3186,10 @@ internal static class Program
 		public bool InteractiveCompatibilityMode { get; set; }
 
 		public bool HexOutput { get; set; }
+
+		public bool AtlasOutput { get; set; }
+
+		public bool AtlasStateOutput { get; set; }
 
 		public Gif320PixelFormat? RawPixelFormat { get; set; }
 

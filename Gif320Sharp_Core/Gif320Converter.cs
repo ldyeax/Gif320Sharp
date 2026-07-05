@@ -126,7 +126,10 @@ namespace Gif320Sharp_Core
 			renderOptions.AutoTuneFrequencyPreference = options.AutoTuneFrequencyPreference;
 			renderOptions.AutoTuneSmoothnessPreference = options.AutoTuneSmoothnessPreference;
 			renderOptions.AutoTuneGlyphReusePreference = options.AutoTuneGlyphReusePreference;
+			renderOptions.AutoTuneLocks = options.AutoTuneLocks;
 			renderOptions.ReverseVideoInversionTolerance = options.ReverseVideoInversionTolerance;
+			renderOptions.ManualAtlas = options.ManualAtlas;
+			renderOptions.ManualCellMap = options.ManualCellMap;
 			renderOptions.GlyphReductionMode = options.AllowGlyphReduction
 				? Gif320GlyphReductionMode.VectorQuantization
 				: Gif320GlyphReductionMode.Exact;
@@ -229,6 +232,7 @@ namespace Gif320Sharp_Core
 				AutoTuneFrequencyPreference = options.AutoTuneFrequencyPreference,
 				AutoTuneSmoothnessPreference = options.AutoTuneSmoothnessPreference,
 				AutoTuneGlyphReusePreference = options.AutoTuneGlyphReusePreference,
+				AutoTuneLocks = options.AutoTuneLocks,
 				ReverseVideoInversionTolerance = options.ReverseVideoInversionTolerance,
 				OptimizeSize = false,
 				IncludeTerminalSetup = false,
