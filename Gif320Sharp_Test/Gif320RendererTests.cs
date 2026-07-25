@@ -116,6 +116,34 @@ namespace Gif320Sharp_Test
 		}
 
 		[TestMethod]
+		public void UpscalingSinglePixelClampsEverySampleToSourceEdge()
+		{
+			byte[] image = CreateSolidImage(1, 1, 255);
+			var renderer = new Gif320Renderer();
+			var options = new Gif320RenderOptions
+			{
+				CellsX = 1,
+				CellsY = 1,
+				AutoTune = false,
+				ResizeMode = Gif320ResizeMode.Stretch,
+				ToneSettings = new Gif320ToneSettings
+				{
+					Threshold = 0.5,
+					DitherMode = Gif320DitherMode.Threshold,
+				},
+			};
+
+			Gif320RenderResult result = renderer.RenderRgb(image, 1, 1, options);
+
+			Assert.AreEqual(0, result.GlyphCount);
+			Assert.AreEqual(" ", result.ScreenRows[0]);
+			Assert.IsTrue(
+				result.ReverseVideoCells[0],
+				"Half-pixel samples at the top, bottom, left, and right boundaries should clamp to the only source pixel."
+			);
+		}
+
+		[TestMethod]
 		public void NearInvertedCellsReuseOneGlyphWithReverseVideo()
 		{
 			byte[] image = CreateInvertedPairImage();

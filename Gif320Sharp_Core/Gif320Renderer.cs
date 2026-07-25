@@ -1762,14 +1762,16 @@ namespace Gif320Sharp_Core
 					}
 
 					int index = y * targetWidth + x;
-					if (sourceX < 0.0
-						|| sourceY < 0.0
-						|| sourceX > sourceWidth - 1
-						|| sourceY > sourceHeight - 1)
+					if (sourceX < -0.5
+						|| sourceY < -0.5
+						|| sourceX > sourceWidth - 0.5
+						|| sourceY > sourceHeight - 0.5)
 					{
 						continue;
 					}
 
+					sourceX = Math.Min(Math.Max(sourceX, 0.0), sourceWidth - 1.0);
+					sourceY = Math.Min(Math.Max(sourceY, 0.0), sourceHeight - 1.0);
 					SampleBilinear(
 						source,
 						sourceWidth,
