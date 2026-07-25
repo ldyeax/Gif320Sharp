@@ -5,7 +5,7 @@ set "SCRIPT_DIR=%~dp0"
 for %%I in ("%SCRIPT_DIR%..") do set "REPO_ROOT=%%~fI"
 
 if "%CONFIGURATION%"=="" set "CONFIGURATION=Release"
-if "%DOTNET_FRAMEWORK%"=="" set "DOTNET_FRAMEWORK=net10.0"
+if "%DOTNET_FRAMEWORK%"=="" set "DOTNET_FRAMEWORK=net9.0"
 if "%GIMP_VERSION%"=="" set "GIMP_VERSION=3.0"
 if "%MSYS_BIN%"=="" set "MSYS_BIN=C:\tools\msys64\mingw64\bin"
 if "%GIMP_ROOT%"=="" set "GIMP_ROOT=%ProgramFiles%\GIMP 3"

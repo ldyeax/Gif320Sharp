@@ -123,17 +123,8 @@ namespace Gif320Sharp_Test
 				"Gif320Sharp",
 				"bin",
 				configuration,
-				"net10.0"
+				"net9.0"
 			);
-			string cliExe = Path.Combine(
-				outputDirectory,
-				OperatingSystem.IsWindows() ? "gif320sharp.exe" : "gif320sharp"
-			);
-			if (File.Exists(cliExe))
-			{
-				return new ProcessInvocation(cliExe, arguments);
-			}
-
 			string cliDll = Path.Combine(outputDirectory, "gif320sharp.dll");
 			Assert.IsTrue(File.Exists(cliDll), "Expected Gif320Sharp CLI to be built.");
 			return new ProcessInvocation("dotnet", Quote(cliDll) + " " + arguments);

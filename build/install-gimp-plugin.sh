@@ -5,7 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 
 configuration=${CONFIGURATION:-Release}
-dotnet_framework=${DOTNET_FRAMEWORK:-net10.0}
+dotnet_framework=${DOTNET_FRAMEWORK:-net9.0}
 gimp_version=${GIMP_VERSION:-3.0}
 gimp_root=${GIMP_ROOT:-}
 restore_arg=--no-restore
