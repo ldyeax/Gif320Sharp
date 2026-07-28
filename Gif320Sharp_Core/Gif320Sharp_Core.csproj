@@ -3,6 +3,7 @@
   <PropertyGroup>
 	<TargetFrameworks Condition="'$(PublishAot)' != 'true'">netstandard2.1;net9.0</TargetFrameworks>
 	<TargetFrameworks Condition="'$(PublishAot)' == 'true'">net9.0</TargetFrameworks>
+	<LangVersion>10</LangVersion>
 	<Nullable>enable</Nullable>
 	<AssemblyName>Gif320Sharp_Core</AssemblyName>
 	<RootNamespace>Gif320Sharp_Core</RootNamespace>

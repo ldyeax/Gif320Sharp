@@ -3077,39 +3077,19 @@ namespace Gif320Sharp_Core
 			public int Weight { get; set; }
 		}
 
-		private readonly struct GlyphKey : IEquatable<GlyphKey>
+		private readonly record struct GlyphKey(
+			ulong A,
+			ulong B,
+			ulong C
+		)
 		{
-			private readonly ulong _a;
-			private readonly ulong _b;
-			private readonly ulong _c;
-
 			public GlyphKey(ulong[] packedBits)
+				: this(
+					packedBits.Length > 0 ? packedBits[0] : 0UL,
+					packedBits.Length > 1 ? packedBits[1] : 0UL,
+					packedBits.Length > 2 ? packedBits[2] : 0UL
+				)
 			{
-				_a = packedBits.Length > 0 ? packedBits[0] : 0UL;
-				_b = packedBits.Length > 1 ? packedBits[1] : 0UL;
-				_c = packedBits.Length > 2 ? packedBits[2] : 0UL;
-			}
-
-			public bool Equals(GlyphKey other)
-			{
-				return _a == other._a && _b == other._b && _c == other._c;
-			}
-
-			public override bool Equals(object? obj)
-			{
-				return obj is GlyphKey other && Equals(other);
-			}
-
-			public override int GetHashCode()
-			{
-				unchecked
-				{
-					int hash = 17;
-					hash = (hash * 31) + _a.GetHashCode();
-					hash = (hash * 31) + _b.GetHashCode();
-					hash = (hash * 31) + _c.GetHashCode();
-					return hash;
-				}
 			}
 		}
 
